@@ -1,3 +1,13 @@
+mrcache
+bench/*
+!bench/*.c
+!bench/*.h
+!bench/bld
+old
+old/*
+todo
+readme
+
 # Prerequisites
 *.d
 
