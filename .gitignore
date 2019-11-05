@@ -7,6 +7,10 @@ old
 old/*
 todo
 readme
+fsblocks
+
+# vi
+.*.swp
 
 # Prerequisites
 *.d

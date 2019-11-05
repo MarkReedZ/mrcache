@@ -5,14 +5,18 @@
 #CFLAGS='-g'
 CFLAGS='-O3'
 gcc -c mrcache.c -o mrcache.o ${CFLAGS}
+gcc -c mrcache_ae.c -o mrcache_ae.o ${CFLAGS}
 gcc -c hashtable.c -o hashtable.o ${CFLAGS}
 gcc -c blocks.c -o blocks.o ${CFLAGS}
 gcc -c city.c -o city.o ${CFLAGS}
-gcc mrcache.o hashtable.o city.o blocks.o ae/libae.a -lzstd -o mrcache ${CFLAGS}
+gcc mrcache.o hashtable.o city.o blocks.o -lmrloop -luring -lzstd -o mrcache ${CFLAGS}
 rm *.o
 
+# Need to split out the fs blocks from blocks.c to build _ae again
+#gcc mrcache_ae.o hashtable.o city.o blocks.o ae/libae.a -lzstd -o mrcache_ae ${CFLAGS}
+
 #gcc -c mrq.c -o mrq.o ${CFLAGS}
-#gcc mrq.o hashtable.o hashtable_key.o city.o blocks.o ae/libae.a -Llib -lmrloop -luring -lzstd -o mrq ${CFLAGS}
+#gcc mrq.o hashtable.o city.o blocks.o ae/libae.a -Llib -lmrloop -luring -lzstd -o mrq ${CFLAGS}
 # gcc tst.c mrloop.o -L. -luring -o tst ${CFLAGS}
 
 #  ASAN_OPTIONS=halt_on_error=0 LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/7/libasan.so ./mrq

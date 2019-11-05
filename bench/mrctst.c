@@ -7,7 +7,7 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
 #define NUM 1000
-#define PIPE 1
+#define PIPE 64
 static int bytes = 0;
 static struct iovec iovs[PIPE];
 static int reps = 0;
@@ -92,7 +92,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
   }
 */ 
   bytes += nread;
-  //printf("bytes %d vs %d\n",bytes, PIPE*6*100);
+  //printf("bytes %d vs %d\n",bytes, PIPE*951*100);
   //if ( bytes >= PIPE*6*100 ) {
   //if ( bytes >= PIPE*10*100 ) {
   if ( bytes >= PIPE*951*100 ) {
@@ -137,7 +137,7 @@ void longTest(int fd) {
   char buf[4096];
   char *p = buf;
   p[0] = 0;
-  p[1] = 8;
+  p[1] = 2;
   uint16_t *p16 = (uint16_t*)(p+2);
   *p16 = 4;
   unsigned int *lenptr = (unsigned int*)(p+4);
@@ -153,7 +153,7 @@ void longTest(int fd) {
   char buf2[4096];
   p = buf2;
   p[0] = 0;
-  p[1] = 7;
+  p[1] = 1;
   p16 = (uint16_t*)(p+2);
   *p16 = 4;
   strcpy( p + 4, "test" );
@@ -166,7 +166,7 @@ void longTest(int fd) {
   if ( 1 ) {
     p += 32;
     p[0] = 0;
-    p[1] = 7;
+    p[1] = 1;
     p16 = (uint16_t*)(p+2);
     *p16 = 4;
     strcpy( p + 4, "test" );

@@ -1,8 +1,8 @@
 
 #pragma once
+
 #include "common.h"
 #include "hashtable.h"
-#include "mrloop.h"
 
 extern hashtable_t *mrq_ht;
 
@@ -14,10 +14,8 @@ enum cmds {
 
 struct settings {
   int port; 
-  int max_memory; // mb
-  int disk_size;  // mb
+  int max_memory;
   uint32_t flags;
-  mrLoop *loop;
 };
 
 #define ENABLE_COMPRESSION  settings.flags |= 0x1
@@ -33,8 +31,4 @@ typedef struct __attribute__((__packed__)) _item {
   char data[];
 } item;
 
-//static void flush();
-
-
-//static void flush();
 
