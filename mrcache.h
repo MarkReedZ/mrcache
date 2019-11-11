@@ -17,7 +17,7 @@ struct settings {
   int max_memory; // mb
   int disk_size;  // mb
   uint32_t flags;
-  mrLoop *loop;
+  mr_loop_t *loop;
 };
 
 #define ENABLE_COMPRESSION  settings.flags |= 0x1
@@ -32,6 +32,13 @@ typedef struct __attribute__((__packed__)) _item {
   uint32_t size;
   char data[];
 } item;
+
+typedef struct _getq_item_t {
+  item *item;
+  char *buf;
+  int sz;
+  void *next;
+} getq_item_t;
 
 //static void flush();
 

@@ -1,5 +1,4 @@
 
-
 // TODO need a way to destroy and free a connection
     //conn_destroy(conn);
     //free(conn);
@@ -23,7 +22,7 @@
 #include "city.h"
 
 
-#define BUFFER_SIZE 16*1024
+#define BUFFER_SIZE 32*1024
 
 // debug
 unsigned long nw = 0;
@@ -32,7 +31,7 @@ unsigned long nr = 0;
 unsigned long rsz = 0;
 unsigned long tot = 0;
 
-static mrLoop *loop = NULL;
+static mr_loop_t *loop = NULL;
 struct settings settings;
 
 hashtable_t *mrq_ht;
@@ -40,12 +39,14 @@ hashtable_t *mrq_ht;
 #define NUM_IOVEC 256
 typedef struct _conn
 {
-  char *buf, *recv_buf, *out_buf;
-  int out_max_sz, out_cur_sz;
+  char *buf, *recv_buf, *out_buf, *out_p;
+  int out_max_sz, out_cur_sz, out_written;
   int max_sz;
   int cur_sz;
   int needs;
   int fd;
+
+  void *getq_head;
 
   struct iovec iovs[NUM_IOVEC];
   int iov_index;
@@ -71,6 +72,8 @@ static double start_time = 0;
 static char resp_get[2] = {0,1};
 static char resp_get_not_found[6] = {0,1,0,0,0,0};
 static char resp_get_not_found_len = 6;
+
+uint64_t num_bits64 (uint64_t x) { return 64 - __builtin_clzll(x); }
 
 static void setup() {
   mrq_ht = malloc( sizeof(hashtable_t) );
@@ -127,15 +130,34 @@ static void conn_append_out( my_conn_t* c, char *data, int len ) {
 
   DBG printf(" append cur now %d %p \n", c->out_cur_sz, c->out_buf);
 }
-
+static int conn_flush( my_conn_t* c ) {
+  ssize_t nwritten = 0;
+  char *p = c->out_buf;
+  while ( c->out_cur_sz > 0 ) {
+    nwritten = write(c->fd, p, c->out_cur_sz);
+    if ( nwritten <= 0 ) return 0; // TODO -1 and not EAGAIN? Close connection?
+    p += nwritten;
+    c->out_cur_sz -= nwritten;
+  }
+  return 1;
+}
 
 
 void finishOnData( my_conn_t *conn ) {
   if ( conn->iov_index > 0 ) {
-    mrWritevf( loop, conn->fd, conn->iovs, conn->iov_index );
+    mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
     conn->iov_index = 0; 
   }
 }
+
+// TODO If the client got backed up 
+void can_write( void *conn, int fd ) {
+  //int l = BUFSIZE;
+  //int nwritten = write(fd,buf,l);
+  //printf("can_write nwritten %d\n",nwritten);
+  //exit(-1);
+}
+
 
 void on_data(void *c, int fd, ssize_t nread, char *buf) {
   my_conn_t *conn = (my_conn_t*)c;
@@ -196,7 +218,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       uint16_t keylen = *((uint16_t*)(p+2));
       char *key = p+4;
 
-      DBG printf("get key >%.*s<\n", keylen, key );
+      DBG_READ printf("get key >%.*s<\n", keylen, key );
       unsigned long hv = CityHash64(key, keylen);      
       item *it = ht_find(mrq_ht, key, keylen, hv);
 
@@ -231,7 +253,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
             conn->iovs[conn->iov_index].iov_base = conn->out_buf;
             conn->iovs[conn->iov_index].iov_len = conn->out_cur_sz;
             conn->iov_index += 1; 
-            mrWritevf( loop, conn->fd, conn->iovs, conn->iov_index );
+            mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
             conn->iov_index = 0; 
             conn->out_cur_sz = 0;
           }
@@ -239,58 +261,66 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
 
         } else { // No compression
 
+          // If read from disk then flush, read and Q up?
+          // If larger than output buffer flush chunks
 
-          conn_append_out( conn, resp_get, 2 );
-          conn_append_out( conn, ((char*)it)+2, it->size+4 );
+          // Copy to the output buffer if it fits
+          if ( (conn->out_cur_sz + it->size+6)  <= BUFFER_SIZE ) {
+            conn_append_out( conn, resp_get, 2 );
+            conn_append_out( conn, ((char*)it)+2, it->size+4 );
+          } else {
 
-          if ( conn->out_cur_sz > 16*1024 ) {
-            //conn->iovs[conn->iov_index].iov_base = conn->out_buf;
-            //conn->iovs[conn->iov_index].iov_len = conn->out_cur_sz;
-            //conn->iov_index += 1; 
-            //mrWritev( loop, conn->fd, conn->iovs, conn->iov_index );
-            //conn->iov_index = 0; 
-            //conn->out_cur_sz = 0;
-            ssize_t nwritten, totlen = 0, count = conn->out_cur_sz;
-            char *b = conn->out_buf;
-            while(totlen != count) {
-              //printf(" tot %d cnt %d\n", totlen, count);
-              nwritten = write(conn->fd,b,count-totlen);
-              if (nwritten == 0) { printf("nwritten 0\n"); exit(-1); }
-              if (nwritten == -1) { printf("nwritten -1 %d %s\n", errno, strerror(errno)); exit(-1); }
-              totlen += nwritten;
-              b += nwritten;
+            // Otherwise flush output buffer
+
+            if ( !conn_flush(conn) ) {
+
+              printf("DELME not flushed\n"); exit(-1); // TODO Test the q and do large item chunks
+
+              // If we were unable to write out the whole buffer do so later
+              mr_add_write_callback( loop, can_write, NULL, fd );
+
+              // push to Q
+              getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
+              qi->item = it;
+              qi->next = conn->getq_head;
+              conn->getq_head = qi;
+              
+            } else {
+              conn->out_cur_sz = 0;
+              conn_append_out( conn, resp_get, 2 );
+              conn_append_out( conn, ((char*)it)+2, it->size+4 );
+              // TODO If the item is larger than the buffer chunk it
+              //if ( it->size+6 > BUFFER_SIZE ) {
+              //} else {
+              //}
             }
-            conn->out_cur_sz = 0;
           }
 
-          //conn->iovs[conn->iov_index].iov_base = resp_get;
-          //conn->iovs[conn->iov_index].iov_len = 2;
-          //conn->iov_index += 1; 
-          //conn->iovs[conn->iov_index].iov_base = ((char*)it)+2;
-          //conn->iovs[conn->iov_index].iov_len = it->size+4;
-          //conn->iov_index += 1; 
-          //if ( conn->iov_index > 128 ) {
-            //mrWritevf( loop, conn->fd, conn->iovs, conn->iov_index );
-            //conn->iov_index = 0; 
-          //}
 
-          DBG printf("getkey: found >%.*s<\n", it->size, it->data);
+          DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
         }
       } else {
+
+          conn_append_out( conn, resp_get_not_found, resp_get_not_found_len );
+
+        /*
         conn->iovs[conn->iov_index].iov_base = resp_get_not_found;
         conn->iovs[conn->iov_index].iov_len = resp_get_not_found_len;
         conn->iov_index += 1; 
         if ( conn->iov_index > 128 ) {
-          mrWritev( loop, conn->fd, conn->iovs, conn->iov_index );
+          mr_writev( loop, conn->fd, conn->iovs, conn->iov_index );
           conn->iov_index = 0; 
         }
-        DBG printf("getkey - not found\n");
+        */
+        DBG_READ printf("getkey - not found\n");
       }
 
       data_left -= 4 + keylen;
       num_writes += 1;
 
     } else if ( cmd == SET ) {
+
+      // TODO max val len = 1m - key and item sizes
 
       uint16_t keylen = *((uint16_t*)(p+2));
       uint32_t vlen = *((uint32_t*)(p+4));
@@ -318,6 +348,9 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       it->keysize = keylen;
       memcpy( it->data+vlen, p+8, keylen ); // Key goes after val
 
+      // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
+      if ( settings.disk_size ) blockAddr |= num_bits64(vlen+8+keylen) << 20; // TODO 8 is the item size?... just do sizeof?
+
       unsigned long hv = CityHash64(key, keylen);      
       ht_insert( mrq_ht, blockAddr, key, keylen, hv );
   
@@ -325,19 +358,20 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       p += 8 + keylen + vlen;
       num_writes += 1;
 
-      //if ( num_writes % 100000 == 0 ) { printf(" DELME num sets %d\n", num_writes ); }
-
-    } else {
+    } else { // Close connection? TODO
       data_left = 0;
     }
   } 
 
 
   //if ( conn->iov_index > 0 ) {
-    //mrWritevf( loop, conn->fd, conn->iovs, conn->iov_index );
+    //mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
     //conn->iov_index = 0; 
   //}
+  if ( conn->out_cur_sz > 0 ) conn_flush(conn);
+/*
           if ( conn->out_cur_sz > 0 ) {
+            printf("DELME writing out buffer at end of on data\n");
             ssize_t nwritten, totlen = 0, count = conn->out_cur_sz;
             char *b = conn->out_buf;
             while(totlen != count) {
@@ -348,7 +382,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
               b += nwritten;
             }
           }
-  
+ */ 
 
   return;
 }
@@ -426,12 +460,28 @@ int main (int argc, char **argv) {
 
   settings.max_memory *= 1024*1024;
 
-  loop = createLoop(sig_handler);
+  loop = mr_create_loop(sig_handler);
   settings.loop = loop;
-  mrTcpServer( loop, settings.port, setup_conn, on_data );
-  //addTimer(loop, 10, on_timer);
-  runLoop(loop);
-  freeLoop(loop);
+  mr_tcp_server( loop, settings.port, setup_conn, on_data );
+  //mr_add_timer(loop, 10, on_timer);
+  mr_run(loop);
+  mr_free(loop);
 
   return 0;
 }
+            //conn->iovs[conn->iov_index].iov_base = conn->out_buf;
+            //conn->iovs[conn->iov_index].iov_len = conn->out_cur_sz;
+            //conn->iov_index += 1; 
+            //mr_writev( loop, conn->fd, conn->iovs, conn->iov_index );
+            //conn->iov_index = 0; 
+            //conn->out_cur_sz = 0;
+          //conn->iovs[conn->iov_index].iov_base = resp_get;
+          //conn->iovs[conn->iov_index].iov_len = 2;
+          //conn->iov_index += 1; 
+          //conn->iovs[conn->iov_index].iov_base = ((char*)it)+2;
+          //conn->iovs[conn->iov_index].iov_len = it->size+4;
+          //conn->iov_index += 1; 
+          //if ( conn->iov_index > 128 ) {
+            //mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
+            //conn->iov_index = 0; 
+          //}

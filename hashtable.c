@@ -83,6 +83,7 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
         return itnew;
       }
       */
+      ht->lastHash = hash; // TODO still need this?
       return it;
     }
     perturb >>= 5;
@@ -100,6 +101,7 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
   uint32_t hash = hv & ht->mask;
   uint32_t perturb = hash;
 
+  // TODO if dummy slot we can install
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
     char *itkey = it->data+it->size;

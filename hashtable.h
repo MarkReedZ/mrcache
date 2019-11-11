@@ -12,6 +12,7 @@ typedef struct {
   uint32_t size;
   uint32_t maxSize;
   uint32_t growthSize;
+  uint64_t lastHash;
 } hashtable_t;
 
 void   ht_init  (hashtable_t *ht);

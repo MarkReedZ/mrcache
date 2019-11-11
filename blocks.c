@@ -27,6 +27,7 @@ static int fsblock_min_block;
 static int num_fs_blocks;
 
 #define FSBLOCK_SIZE 64
+#define BLOCK_SHIFT 25
 
 void blocks_init() {
   num_blocks = settings.max_memory;
@@ -79,7 +80,7 @@ uint64_t blocks_alloc( int sz ) {
   cur_block_size += sz;
   items_in_block[ cur_block%num_blocks ] += 1;
 
-  return (cur_block << 20) | (cur_block_size-sz);
+  return (cur_block << BLOCK_SHIFT) | (cur_block_size-sz);
 }
 
 void blocks_lru() {
@@ -99,8 +100,9 @@ void blocks_lru() {
   
 }
 
+// 39 bits of block id, 5 bits of storage, 20 bits of value length 
 void *blocks_translate( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> 20;
+  uint64_t blk = blockAddr >> BLOCK_SHIFT; // >> 25
   if ( blk < min_block ) return NULL;
   uint32_t off = blockAddr & 0xFFFFF;
   return (base + ((blk%num_blocks)<<20)) + off;
@@ -113,19 +115,19 @@ bool blocks_isvalid( int block ) {
 
 bool blocks_isNearLru( uint64_t blockAddr ) {
   if ( !full ) return false;
-  uint64_t blk = blockAddr >> 20;
+  uint64_t blk = blockAddr >> BLOCK_SHIFT;
   //printf(" DELME blk %d min %d\n", blk, min_block);
   if ( blk < (min_block + 4) ) return true;
   return false;
 }
 
 void blocks_decrement( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> 20;
+  uint64_t blk = blockAddr >> BLOCK_SHIFT;
   items_in_block[ blk ] -= 1;
 }
 
 bool blocks_isInvalid( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> 20;
+  uint64_t blk = blockAddr >> BLOCK_SHIFT;
   if ( blk < min_block ) return true;
   return false;
 }
@@ -146,8 +148,8 @@ void blocks_fs_write( int blk ) {
   fsblock_size += 1;
 
   int fd = fsblock_fds[fsblock_index];
-  mrWritevcb( settings.loop, fd, iov, 1, (void*)iov, blocks_on_write_done  );
-  mrFlush(settings.loop);
+  mr_writevcb( settings.loop, fd, iov, 1, (void*)iov, blocks_on_write_done  );
+  mr_flush(settings.loop);
 
   if ( fsblock_size == 64 ) {
     printf(" DELME fsblock %d full\n", fsblock_index);
