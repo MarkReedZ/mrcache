@@ -1,7 +1,11 @@
 
-gcc tst.c -lmrloop -L. -luring -o tst ${CFLAGS}
-gcc mrctst.c -lmrloop -L. -luring -o mrctst ${CFLAGS}
-gcc mctst.c -lmrloop -L. -luring -o mctst ${CFLAGS}
-gcc rtst.c -lmrloop -L. -luring -o rtst ${CFLAGS}
-gcc sets.c -lmrloop -L. -luring -o sets ${CFLAGS}
+#CFLAGS='-Wall -O0 -g -fsanitize=address -fno-omit-frame-pointer -fsanitize-recover=address'
+CFLAGS='-O3'
 
+#gcc tst.c -lmrloop -L. -luring -o tst ${CFLAGS}
+gcc mrctst.c -lmrloop -L. -luring -o mrctst ${CFLAGS}
+#gcc mctst.c -lmrloop -L. -luring -o mctst ${CFLAGS}
+#gcc rtst.c -lmrloop -L. -luring -o rtst ${CFLAGS}
+#gcc sets.c -lmrloop -L. -luring -o sets ${CFLAGS}
+
+#gcc stalls.c -lmrloop -L. -luring -o stalls ${CFLAGS}

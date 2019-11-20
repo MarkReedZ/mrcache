@@ -15,7 +15,7 @@ static int num_blocks;
 static int min_block;
 static void *base;
 static void *cur;
-static uint32_t cur_block;
+static uint64_t cur_block;
 static uint32_t cur_block_size;
 static bool full;
 static int *items_in_block;
@@ -26,8 +26,6 @@ static int fsblock_size;
 static int fsblock_min_block;
 static int num_fs_blocks;
 
-#define FSBLOCK_SIZE 64
-#define BLOCK_SHIFT 25
 
 void blocks_init() {
   num_blocks = settings.max_memory;
@@ -156,7 +154,7 @@ void blocks_fs_write( int blk ) {
     fsblock_index = (fsblock_index+1)%num_fs_blocks;
     fsblock_size = 0;
     fsblock_min_block += 64;
-    int rc = ftruncate( fsblock_fds[fsblock_index], 0 );
+    ftruncate( fsblock_fds[fsblock_index], 0 );// TODO test return code?
   }
 
 }

@@ -4,7 +4,7 @@
 #include "blocks.h"
 #include "city.h"
 
-static int num_lru_move = 0;
+//static int num_lru_move = 0;
 
 void ht_init(hashtable_t *ht) {
 
@@ -63,9 +63,11 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
 
   uint32_t hash = hv & ht->mask;
   uint32_t perturb = hash;
+  DBG_SET printf("ht_find hash 0x%08x \n", hash );
 
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
+    DBG_SET printf("ht_find hash 0x%08x \n", hash );
     char *itkey = it->data+it->size;
     if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
       /*
@@ -83,7 +85,8 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
         return itnew;
       }
       */
-      ht->lastHash = hash; // TODO still need this?
+      //ht->lastHash = hash; // TODO still need this?
+      ht->lastBlock = GET_BLOCK(ht->tbl[hash]);
       return it;
     }
     perturb >>= 5;
@@ -97,7 +100,7 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
 
 // TODO Can pass in the item to avoid an extra translate
 void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
-
+  DBG_SET printf("ht_insert blkadr 0x%lx key >%.*s<\n", blockAddr, keylen, key);
   uint32_t hash = hv & ht->mask;
   uint32_t perturb = hash;
 
@@ -105,16 +108,22 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
     char *itkey = it->data+it->size;
-    if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) break;
+    if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
+      ht->tbl[hash] = blockAddr; // Use the new item location
+      return;
+    }
     perturb >>= 5;
     hash = (hash*5 + perturb + 1) & ht->mask;
-    if ( ht->tbl[hash] == 0 ) break;
+
+    // if 0 or if LRU'd block 
+    if ( !blocks_isvalid(ht->tbl[hash])  ) break;
     it = blocks_translate(ht->tbl[hash]);
   }
-  // TODO remove old item if we are overwriting
+  DBG_SET printf("ht_insert hash 0x%08x \n", hash );
   ht->tbl[hash] = blockAddr;
   ht->size += 1;
   if ( ht->size > ht->growthSize ) ht_resize(ht);
+
 }
 
 // Called after we lru a block with the number of items in that block

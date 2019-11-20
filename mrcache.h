@@ -36,7 +36,8 @@ typedef struct __attribute__((__packed__)) _item {
 typedef struct _getq_item_t {
   item *item;
   char *buf;
-  int sz;
+  int cur, sz;
+  uint64_t block;
   void *next;
 } getq_item_t;
 
@@ -44,4 +45,6 @@ typedef struct _getq_item_t {
 
 
 //static void flush();
+
+void can_write( void *conn, int fd );
 

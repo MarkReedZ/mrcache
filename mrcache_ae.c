@@ -49,7 +49,6 @@ struct sockaddr_in addr;
 //static int total_clients = 0;  // Total number of connected clients
 //static int total_mem = 0;
 static int num_writes = 0;
-static double start_time = 0;
 
 //static char item_buf[1024] = {0,1};
 //static int item_len = 0;

@@ -19,7 +19,7 @@ rm *.o
 #gcc mrq.o hashtable.o city.o blocks.o ae/libae.a -Llib -lmrloop -luring -lzstd -o mrq ${CFLAGS}
 # gcc tst.c mrloop.o -L. -luring -o tst ${CFLAGS}
 
-#  ASAN_OPTIONS=halt_on_error=0 LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/7/libasan.so ./mrq
+#  ASAN_OPTIONS=halt_on_error=0 LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/7/libasan.so ./mrcache
 
 #
 #gcc -DHAVE_CONFIG_H -I.  -DNDEBUG   -g -O2 -pthread -pthread -Wall -Werror -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -MT memcached-cache.o -MD -MP -MF .deps/memcached-cache.Tpo -c -o memcached-cache.o `test -f 'cache.c' || echo './'`cache.c

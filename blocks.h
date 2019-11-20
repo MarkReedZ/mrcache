@@ -12,6 +12,12 @@ void block_init(block_t *blk);
 uint64_t block_alloc( block_t *blk, int sz );
 */
 
+#define FSBLOCK_SIZE 64
+#define BLOCK_SHIFT 25
+
+#define GET_BLOCK(x) ((x) >> BLOCK_SHIFT);
+
+
 void blocks_init();
 uint64_t blocks_alloc( int sz );
 bool blocks_isvalid( int block );

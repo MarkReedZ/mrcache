@@ -21,6 +21,9 @@
 #include "blocks.h"
 #include "city.h"
 
+//Debug
+static uint64_t bytes = 0;
+static uint64_t fbytes = 0;
 
 #define BUFFER_SIZE 32*1024
 
@@ -46,7 +49,8 @@ typedef struct _conn
   int needs;
   int fd;
 
-  void *getq_head;
+  getq_item_t *getq_head, *getq_tail;
+  bool stalled;
 
   struct iovec iovs[NUM_IOVEC];
   int iov_index;
@@ -54,18 +58,12 @@ typedef struct _conn
   int write_in_progress;
 } my_conn_t;
 
-#define RESIZE_OUT_BUFFER_IF_NECESSARY( c, sz ) \
-  if ( (c->out_cur_sz + sz) > c->out_max_sz ) { \
-    while ( (c->out_cur_sz + sz) > c->out_max_sz ) c->out_max_sz <<= 1; \
-    c->out_buf = realloc( c->out_buf, c->out_max_sz ); \
-  }
-
 struct sockaddr_in addr;
 
 //static int total_clients = 0;  // Total number of connected clients
 //static int total_mem = 0;
 static int num_writes = 0;
-static double start_time = 0;
+//static int num_items = 0;
 
 //static char item_buf[1024] = {0,1};
 //static int item_len = 0;
@@ -96,13 +94,21 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
   c->buf = malloc( BUFFER_SIZE*2 );
   c->recv_buf = malloc( BUFFER_SIZE );
   c->max_sz = BUFFER_SIZE*2;
-  c->out_buf = malloc( BUFFER_SIZE );
+  c->out_buf = c->out_p = malloc( BUFFER_SIZE );
   c->out_max_sz = BUFFER_SIZE;
   *buf = c->recv_buf;
   *buflen = BUFFER_SIZE;
   return c;
 }
 
+void free_conn( my_conn_t *c ) {
+  free(c->buf);
+  free(c->recv_buf);
+  free(c->out_buf);
+  free(c);
+}
+
+// TODO delete?
 static void conn_append( my_conn_t* c, char *data, int len ) {
   DBG printf(" append cur %d \n", c->cur_sz);
 
@@ -117,46 +123,289 @@ static void conn_append( my_conn_t* c, char *data, int len ) {
   DBG printf(" append cur now %d %p \n", c->cur_sz, c->buf);
 
 }
-static void conn_append_out( my_conn_t* c, char *data, int len ) {
-  DBG printf(" append out %d \n", c->out_cur_sz);
 
-  //if ( (c->out_cur_sz + len) > c->out_max_sz ) {
-    //while ( (c->out_cur_sz + len) > c->out_max_sz ) c->out_max_sz <<= 1;
-    //c->out_buf = realloc( c->out_buf, c->out_max_sz );
-  //}
+/*
+static int bytes_written = 0;
+static int items_written = 0;
+static void test_data( my_conn_t *c, char *in, int sz ) {
+  static char buf[512*1024*1024];
+  static char *bp = buf;
+  static char *p = buf;
+  static int blen = 0;
+  bytes_written += sz;
 
-  memcpy( c->out_buf + c->out_cur_sz, data, len ); 
-  c->out_cur_sz += len;
+  memcpy( bp, in, sz );
+  blen += sz;
+  bp += sz;
 
-  DBG printf(" append cur now %d %p \n", c->out_cur_sz, c->out_buf);
+  if ( blen > 256*1024*1024 ) { printf(" DELME more than 256m \n"); exit(1); }
+
+  if ( blen < 6 ) return;
+
+  //DELME printf("  blen %d sz %d\n", blen, sz);
+  while ( (p-buf) < (blen-6) ) {
+
+    if ( p[0] != 0 ) { printf(" p0 is not 0\n"); goto prt; }
+    if ( p[1] != 1 ) { printf(" p1 is not 1\n"); goto prt; }
+  
+    unsigned int  l  = *((unsigned int*)(p+2));
+    if ( l != 5000 ) { printf(" sz is not 5000 its %d\n", l ); goto prt; }
+    if ( (p-buf) + l > blen ) break;
+    //if ( blen < 6 + l ) break;
+  
+    p += l+6;
+    //blen -= l + 6;
+    items_written += 1;
+  }
+
+  //if ( blen ) memcpy( buf, p, blen ); 
+ 
+  return;
+prt:
+  print_buffer( p, 16 );
+  printf("\n blen %d num items %d\n",blen,items_written);
+  FILE *fp = fopen( "err.out", "wb" );
+  fwrite(buf, 1, blen, fp);
+  fclose(fp);
+  exit(1); 
 }
-static int conn_flush( my_conn_t* c ) {
+*/
+
+static int conn_flush( my_conn_t *c ) {
   ssize_t nwritten = 0;
-  char *p = c->out_buf;
+
   while ( c->out_cur_sz > 0 ) {
-    nwritten = write(c->fd, p, c->out_cur_sz);
-    if ( nwritten <= 0 ) return 0; // TODO -1 and not EAGAIN? Close connection?
-    p += nwritten;
+    nwritten = write(c->fd, c->out_p, c->out_cur_sz);
+    if ( nwritten <= 0 ) {
+      if ( nwritten == -1 && errno == EAGAIN ) {
+        mr_add_write_callback( loop, can_write, c, c->fd );
+      }
+      c->stalled = true;
+      return 0; // TODO -1 and not EAGAIN? Close connection? Make socket blocking and kill client
+    }
+    //test_data( c, c->out_p, nwritten );
+    c->out_p += nwritten;
     c->out_cur_sz -= nwritten;
   }
+  c->out_p = c->out_buf;
   return 1;
+}
+static int conn_append_out( my_conn_t* c, char *p, int sz ) {
+  //DBG printf(" append out %d \n", c->out_cur_sz);
+  if ( c->out_p != c->out_buf ) return sz;
+  int rlen = BUFFER_SIZE - c->out_cur_sz;
+  int len = sz < rlen ? sz : rlen;
+  memcpy( c->out_buf + c->out_cur_sz, p, len ); 
+  c->out_cur_sz += len;
+
+  //if ( sz != len ) printf("YAY partial out buffer append sz %d len %d\n", sz, len);
+  
+  return sz - len;
+}
+static int conn_write_command( my_conn_t *conn ) {
+  if ( conn->out_cur_sz < 2 && !conn_flush(conn) ) return 0; 
+  conn_append_out( conn, resp_get, 2 );
+  return 1;
+}
+// Returns the number of bytes written if partial otherwise 0 for success
+//  TODO this can probably return 0 if we're already stalled!
+static int conn_write_buffer( my_conn_t* conn, char *buf, int bsz ) {
+  // If we didn't append all of our data to the output buffer
+  // flush it and continue until done or stalled
+  int sz = conn_append_out( conn, buf, bsz );
+
+  char *p = buf + bsz-sz;
+  while ( sz ) {
+    if ( !conn_flush(conn) ) {
+      // If we were unable to write out the whole buffer do so later
+      if ( bsz-sz == 0 ) {
+        printf("DELME Yeah we can't return 0 here!\n");
+        exit(1);
+      }
+      return bsz-sz; 
+    }
+
+    int rem = conn_append_out( conn, p, sz );
+    p += sz-rem;
+    sz = rem;
+  }
+  return 0;
 }
 
 
+
+static void conn_process_queue_comp( my_conn_t *conn ) {
+
+  while ( conn->getq_head ) {
+    getq_item_t *qi = conn->getq_head;
+    if ( qi->item ) {
+      item *it = qi->item;
+      unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
+
+      // Write cmd bytes or if that fails bail
+      if ( conn_write_command( conn ) ) {
+        char *dbuf = malloc( decomp_sz+4 );
+        int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
+        uint32_t *p32 = (uint32_t*)(dbuf);
+        *p32 = decomp_size;
+        int n = conn_write_buffer( conn, dbuf, decomp_size+4 );
+
+        if ( n ) {
+          qi->item = NULL;
+          qi->buf = dbuf;
+          qi->cur = n;
+          qi->sz  = decomp_size+4-n;
+          return;
+        } 
+        else free(dbuf);
+      } else {
+        return;
+      }
+
+    } else if ( qi->buf ) {
+
+      int n = conn_write_buffer( conn, qi->buf+qi->cur, qi->sz );
+      if ( n ) {
+        qi->cur += n;
+        qi->sz -= n;
+        return;
+      }
+      
+      free(qi->buf);
+    }
+
+    conn->getq_head = qi->next;
+    if ( conn->getq_head == NULL ) conn->getq_tail = NULL;
+    free(qi);
+
+  }
+
+  // Flush the buffer when done
+  conn_flush(conn);
+     
+}
+
+static void conn_process_queue( my_conn_t *conn ) {
+  while ( conn->getq_head ) {
+    getq_item_t *qi = conn->getq_head;
+
+    if ( qi->item ) {
+
+      // Make sure we have room for the cmd bytes
+      if ( conn->out_cur_sz < 2 && !conn_flush(conn) ) return;
+
+      item *it = qi->item;
+      conn_append_out( conn, resp_get, 2 );
+      char *p = ((char*)it)+2;
+      int n = conn_write_buffer( conn, p, it->size+4 );
+      // If we stalled n is non zero and the number of bytes written
+      if ( n ) {
+        qi->item = NULL;
+        qi->buf = p;
+        qi->cur = n;
+        qi->sz  = it->size+4-n;
+        //printf("DELME return from pq due to stall\n");
+        return;
+      } 
+
+    } else if ( qi->buf ) {
+      
+      int n = conn_write_buffer( conn, qi->buf + qi->cur, qi->sz );
+      if ( n ) { 
+        qi->cur += n;
+        qi->sz -= n;
+        return;
+      }
+
+    }
+
+    conn->getq_head = qi->next;
+    if ( conn->getq_head == NULL ) conn->getq_tail = NULL;// TODO do we need this
+    // TODO free? We need a flag to free or not a buffer
+
+  }
+  // Flush the buffer when done
+  conn_flush(conn);
+}
+
+void can_write( void *conn, int fd ) {
+
+  my_conn_t *c = conn;
+  if ( !conn_flush(c) ) return;
+  c->stalled = false;
+
+  // Add any queue'd items to the buffer
+  if ( COMPRESSION_ENABLED ) conn_process_queue_comp( c );
+  else                       conn_process_queue( c );
+
+}
+
+static void conn_queue_item( my_conn_t* conn, item *it ) {
+  getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
+  qi->item = it; 
+  qi->block = mrq_ht->lastBlock;
+  if ( conn->getq_head == NULL ) {
+    conn->getq_head = conn->getq_tail = qi;
+    return;
+  }
+  conn->getq_tail->next = qi;
+  conn->getq_tail = qi;
+}
+
+static void conn_queue_buffer( my_conn_t* conn, char *buf, int sz ) {
+  getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
+  // TODO last block may not be accurate ( processing queue ) so pass in the block id
+  qi->block = mrq_ht->lastBlock; // If we manage to LRU the block don't try to access the data later
+  qi->buf = buf;
+  qi->sz = sz; 
+  if ( conn->getq_head == NULL ) {
+    conn->getq_head = conn->getq_tail = qi;
+    return;
+  }
+  conn->getq_tail->next = qi;
+  conn->getq_tail = qi;
+}
+static void conn_queue_buffer2( my_conn_t* conn, char *buf, int sz, int nwritten ) {
+  getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
+  // TODO last block may not be accurate ( processing queue ) so pass in the block id
+  qi->block = mrq_ht->lastBlock; // If we manage to LRU the block don't try to access the data later
+  qi->buf = buf;
+  qi->cur = nwritten;
+  qi->sz = sz-nwritten; 
+  if ( conn->getq_head == NULL ) {
+    conn->getq_head = conn->getq_tail = qi;
+    return;
+  }
+  conn->getq_tail->next = qi;
+  conn->getq_tail = qi;
+}
+
+static void conn_write_item( my_conn_t* conn, item *it ) {
+
+  if ( conn->out_cur_sz < 2 ) {
+    if ( !conn_flush(conn) ) {
+      conn_queue_item( conn, it );
+      return;
+    }
+  }
+  conn_append_out( conn, resp_get, 2 );
+  int n =  conn_write_buffer( conn, ((char*)it)+2, it->size+4 );
+  if ( n ) conn_queue_buffer( conn, ((char*)it)+2+n, it->size+4-n );
+
+}
+
 void finishOnData( my_conn_t *conn ) {
-  if ( conn->iov_index > 0 ) {
-    mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
-    conn->iov_index = 0; 
+  if ( !conn->stalled ) {
+    if (conn->getq_head) {
+      if ( COMPRESSION_ENABLED ) conn_process_queue_comp( conn );
+      else                       conn_process_queue( conn );
+    }
+    if ( conn->out_cur_sz > 0 ) {
+      conn_flush(conn);
+    }
   }
 }
 
-// TODO If the client got backed up 
-void can_write( void *conn, int fd ) {
-  //int l = BUFSIZE;
-  //int nwritten = write(fd,buf,l);
-  //printf("can_write nwritten %d\n",nwritten);
-  //exit(-1);
-}
 
 
 void on_data(void *c, int fd, ssize_t nread, char *buf) {
@@ -164,23 +413,20 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
   char *p = NULL;
   int data_left = nread;
 
-  //printf( " %d writes time taken %f \n ", num_writes, ((double)(clock()-start_time))/CLOCKS_PER_SEC );
-  DBG printf("on_data nread %ld nw %d\n", nread, num_writes);
-  //DBG if (conn->needs) { printf("needs %d\n", conn->needs);}
-  //print_buffer( buf, (nread>32) ? 32 : nread  );
+  // TODO close in mr loop and have a closed callback
+  if ( nread < 0 ) { 
+    printf(" DELME client closed the connection \n");
+    free_conn(c);
+    return;
+  }
+  bytes += nread; 
 
   // If we have partial data for this connection
   if ( conn->cur_sz ) {
-    DBG printf("Received %d more bytes need %d\n",(int)nread, conn->needs);
-    //conn_print( conn );
     conn_append( conn, buf, nread );
-    DBG print_buffer( conn->buf, 32 );
-    DBG printf("cur is now %d\n",conn->cur_sz);
-    //conn_print( conn );
     if ( conn->cur_sz >= conn->needs ) {
       p = conn->buf;
       data_left = conn->cur_sz;
-      DBG printf("Got enough %d num wirtes %d\n", data_left, num_writes);
       conn->cur_sz = 0;
     } else {
       return;
@@ -194,7 +440,6 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
     if ( data_left < 2 ) {
       conn_append( conn, p, data_left );
       conn->needs = 2;
-      DBG printf("Received partial data %d more bytes need %d\n",data_left, conn->needs);
       finishOnData(conn);
       return;
     }
@@ -207,16 +452,22 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
 
     if ( cmd == GET ) {
 
+      //num_items += 1; if ( num_items%1000==0 ) printf(" num_items %d\n", num_items);
       if ( data_left < 4 ) {
         conn_append( conn, p, data_left );
         conn->needs = 4;
         finishOnData(conn);
-        DBG printf(" Not enough for a get left %d ", data_left );
-        DBG print_buffer( p, data_left );
         return;
       }
       uint16_t keylen = *((uint16_t*)(p+2));
       char *key = p+4;
+
+      if ( data_left < 4+keylen ) {
+        conn_append( conn, p, data_left );
+        conn->needs = 4+keylen;
+        finishOnData(conn);
+        return;
+      }
 
       DBG_READ printf("get key >%.*s<\n", keylen, key );
       unsigned long hv = CityHash64(key, keylen);      
@@ -226,136 +477,122 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
 
         if ( COMPRESSION_ENABLED ) {
 
-          unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
-          RESIZE_OUT_BUFFER_IF_NECESSARY( conn, decomp_sz+6 ) // 2B cmd + 4B len + data
-          int decomp_size = ZSTD_decompress( conn->out_buf+6+conn->out_cur_sz, decomp_sz, it->data, it->size );
-          DBG printf("getkey: decompressed >%.*s<\n", decomp_size, conn->out_buf+6+conn->out_cur_sz);
-          char *ob = conn->out_buf + conn->out_cur_sz;
-          ob[0] = 0; ob[1] = 1;
-          uint32_t *p32 = (uint32_t*)(ob+2);
-          *p32 = decomp_size;
-          conn->out_cur_sz += 6 + decomp_size;
-          // if out_cur_sz > some num then write the output buffer?
+          if ( conn->getq_head ) conn_queue_item( conn, it );
+          else { 
 
-          if ( conn->out_cur_sz > 16*1024 ) {
+            unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
+            // Write cmd bytes or if that fails queue the item
+            if ( conn_write_command( conn ) ) {
+              // Decompress to a newly malloc'd buffer and flush chunks TODO
+              char *dbuf = malloc( decomp_sz+4 );
+              int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
+              uint32_t *p32 = (uint32_t*)(dbuf);
+              *p32 = decomp_size;
 
-/*
-            ssize_t nwritten, totlen = 0, count = conn->out_cur_sz;
-            char *b = conn->out_buf;
-            while(totlen != count) {
-              nwritten = write(conn->fd,b,count-totlen);
-              if (nwritten == 0) { printf("nwritten 0\n"); exit(-1); }
-              if (nwritten == -1) { printf("nwritten -1 %d %s\n", errno, strerror(errno)); exit(-1); }
-              totlen += nwritten;
-              b += nwritten;
+              int n = conn_write_buffer( conn, dbuf, decomp_size+4 );
+              DBG_READ printf(" GET conn_write_buffer n %d\n", n);
+              if ( n ) conn_queue_buffer2( conn, dbuf, decomp_size+4, n ); // TODO If we Q up we need to free later
+              else     free(dbuf);
+
+            } else {
+              conn_queue_item( conn, it );
             }
-*/
-            conn->iovs[conn->iov_index].iov_base = conn->out_buf;
-            conn->iovs[conn->iov_index].iov_len = conn->out_cur_sz;
-            conn->iov_index += 1; 
-            mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
-            conn->iov_index = 0; 
-            conn->out_cur_sz = 0;
-          }
 
+          }
 
         } else { // No compression
 
-          // If read from disk then flush, read and Q up?
-          // If larger than output buffer flush chunks
-
-          // Copy to the output buffer if it fits
-          if ( (conn->out_cur_sz + it->size+6)  <= BUFFER_SIZE ) {
-            conn_append_out( conn, resp_get, 2 );
-            conn_append_out( conn, ((char*)it)+2, it->size+4 );
-          } else {
-
-            // Otherwise flush output buffer
-
-            if ( !conn_flush(conn) ) {
-
-              printf("DELME not flushed\n"); exit(-1); // TODO Test the q and do large item chunks
-
-              // If we were unable to write out the whole buffer do so later
-              mr_add_write_callback( loop, can_write, NULL, fd );
-
-              // push to Q
-              getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
-              qi->item = it;
-              qi->next = conn->getq_head;
-              conn->getq_head = qi;
-              
-            } else {
-              conn->out_cur_sz = 0;
-              conn_append_out( conn, resp_get, 2 );
-              conn_append_out( conn, ((char*)it)+2, it->size+4 );
-              // TODO If the item is larger than the buffer chunk it
-              //if ( it->size+6 > BUFFER_SIZE ) {
-              //} else {
-              //}
-            }
-          }
-
-
+          // If we have items queued up add this one 
+          if ( conn->getq_head ) conn_queue_item( conn, it );
+          else                   conn_write_item( conn, it );
           DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
+
         }
       } else {
 
-          conn_append_out( conn, resp_get_not_found, resp_get_not_found_len );
+        int n =  conn_write_buffer( conn, resp_get_not_found, resp_get_not_found_len );
+        if ( n ) conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
 
-        /*
-        conn->iovs[conn->iov_index].iov_base = resp_get_not_found;
-        conn->iovs[conn->iov_index].iov_len = resp_get_not_found_len;
-        conn->iov_index += 1; 
-        if ( conn->iov_index > 128 ) {
-          mr_writev( loop, conn->fd, conn->iovs, conn->iov_index );
-          conn->iov_index = 0; 
-        }
-        */
         DBG_READ printf("getkey - not found\n");
       }
 
+      //printf(" dl %d\n",data_left);
       data_left -= 4 + keylen;
       num_writes += 1;
 
     } else if ( cmd == SET ) {
 
-      // TODO max val len = 1m - key and item sizes
-
+      if ( data_left < 8 ) {
+        conn_append( conn, p, data_left );
+        conn->needs = 8;
+        finishOnData(conn);
+        return;
+      }
       uint16_t keylen = *((uint16_t*)(p+2));
       uint32_t vlen = *((uint32_t*)(p+4));
+
+      if ( data_left < 8+keylen+vlen ) {
+        conn_append( conn, p, data_left );
+        conn->needs = 8+keylen+vlen;
+        finishOnData(conn);
+        return;
+      }
+
       char *key = p+8;
       DBG printf("set key %d >%.*s<\n", keylen, keylen, key );
       char *val = p+8+keylen;
       DBG printf("set val %d >%.*s<\n", vlen, vlen, val );
 
-      uint64_t blockAddr = blocks_alloc( sizeof(item) + vlen + keylen );
-      DBG printf("block addr %ld\n", blockAddr);
-      item *it = blocks_translate( blockAddr );
-      DBG printf("item ptr %p\n", it);
+      uint64_t blockAddr;
+      item *it;
 
       if ( COMPRESSION_ENABLED ) {
-        int rc = ZSTD_compress( it->data, vlen, p+8+keylen, vlen, 3 );
-        DBG printf(" compress rc %d\n", rc);
+        blockAddr = blocks_alloc( sizeof(item) + vlen + keylen + 64 );
+        it = blocks_translate( blockAddr );
+        int rc = ZSTD_compress( it->data, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
+
+        //if ( ZSTD_isError(rc) ) {
+          //const char *err = ZSTD_getErrorName(rc);
+          //printf("DELME zstd error %s\n", err );
+          //exit(1);
+        //}
+
+        // If successful store it otherwise ignore this cmd
         if ( rc > 0 ) {
-          it->size = vlen = rc;
-        }
+          int compressed_size = it->size = rc;
+          it->keysize = keylen;
+          memcpy( it->data+compressed_size, p+8, keylen ); // Key goes after val
+          data_left -= (8 + keylen + vlen);
+          p += 8 + keylen + vlen;
+
+          // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
+          if ( settings.disk_size ) blockAddr |= num_bits64(vlen+8+keylen) << 20; // TODO 8 is the item size?... just do sizeof?
+          unsigned long hv = CityHash64(key, keylen);      
+          ht_insert( mrq_ht, blockAddr, key, keylen, hv );
+
+        } 
+
       } else {
+
+        blockAddr = blocks_alloc( sizeof(item) + vlen + keylen );
+        it = blocks_translate( blockAddr );
+        DBG_SET printf(" set - it %p baddr %lx\n", it, blockAddr);
         it->size = vlen;
         memcpy( it->data, p+8+keylen, vlen ); // Val
+
+        it->keysize = keylen;
+        memcpy( it->data+vlen, p+8, keylen ); // Key goes after val
+
+        data_left -= (8 + keylen + vlen);
+        p += 8 + keylen + vlen;
+
+        // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
+        if ( settings.disk_size ) blockAddr |= num_bits64(vlen+8+keylen) << 20; // TODO 8 is the item size?... just do sizeof?
+        unsigned long hv = CityHash64(key, keylen);      
+        ht_insert( mrq_ht, blockAddr, key, keylen, hv );
       }
 
-      it->keysize = keylen;
-      memcpy( it->data+vlen, p+8, keylen ); // Key goes after val
-
-      // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
-      if ( settings.disk_size ) blockAddr |= num_bits64(vlen+8+keylen) << 20; // TODO 8 is the item size?... just do sizeof?
-
-      unsigned long hv = CityHash64(key, keylen);      
-      ht_insert( mrq_ht, blockAddr, key, keylen, hv );
   
-      data_left -= 8 - keylen - vlen;
-      p += 8 + keylen + vlen;
       num_writes += 1;
 
     } else { // Close connection? TODO
@@ -363,26 +600,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
     }
   } 
 
-
-  //if ( conn->iov_index > 0 ) {
-    //mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
-    //conn->iov_index = 0; 
-  //}
-  if ( conn->out_cur_sz > 0 ) conn_flush(conn);
-/*
-          if ( conn->out_cur_sz > 0 ) {
-            printf("DELME writing out buffer at end of on data\n");
-            ssize_t nwritten, totlen = 0, count = conn->out_cur_sz;
-            char *b = conn->out_buf;
-            while(totlen != count) {
-              nwritten = write(conn->fd,b,count-totlen);
-              if (nwritten == 0) { printf("nwritten 0\n"); exit(-1); }
-              if (nwritten == -1) { printf("nwritten -1\n"); printf("%s\n",strerror(errno)); exit(-1); }
-              totlen += nwritten;
-              b += nwritten;
-            }
-          }
- */ 
+  finishOnData(conn);
 
   return;
 }
@@ -403,6 +621,8 @@ static void usage(void) {
 }
 
 int main (int argc, char **argv) {
+
+  signal(SIGPIPE, SIG_IGN);
 
   char *shortopts =
     "h"
@@ -469,6 +689,10 @@ int main (int argc, char **argv) {
 
   return 0;
 }
+
+// TODO writev was slower than copying to an output buffer and queue'ng items up
+// If we can writev AND guarantee all writes flush and don't return EAGAIN 
+
             //conn->iovs[conn->iov_index].iov_base = conn->out_buf;
             //conn->iovs[conn->iov_index].iov_len = conn->out_cur_sz;
             //conn->iov_index += 1; 
