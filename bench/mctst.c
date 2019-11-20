@@ -1,13 +1,17 @@
 
 #include "mrloop.h"
 
+#include <sys/time.h>
+static struct timeval  tv1, tv2;
+
 #define BUFSIZE 64*1024
 #define NUM 1000
 #define PIPE 64
 static int bytes = 0;
 static struct iovec iovs[128];
 static double start_time = 0;
-
+static int reps = 0;
+static int vlen = 100;
 
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
@@ -24,7 +28,7 @@ typedef struct _conn
   char buf[BUFSIZE];
 } conn_t;
 
-static mrLoop *loop = NULL;
+static mr_loop_t *loop = NULL;
 
 void on_timer() { 
   printf("tick\n");
@@ -43,10 +47,25 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
   //printf("on_data >%.*s<\n", nread, buf);
   bytes += nread;
   //printf("bytes: %d\n", bytes);
-  if ( bytes == NUM*PIPE*28 ) {
-    double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
-    printf( " %d gets time taken %f cps %f \n ", NUM*100, taken, (NUM*128)/taken );
+  //printf("bytes: %d\n", PIPE*32);
+  if ( bytes >= PIPE*(22+vlen) ) {
+    bytes = 0;
+    reps += 1;
+    if ( reps < NUM ) {
+      //mr_writev( loop, fd, iovs, PIPE );
+      //for( int i = 0; i < 100; i++ ) {
+        mr_writev( loop, fd, iovs, PIPE );
+      //}
+    } else {
+      gettimeofday(&tv2, NULL);
+      double secs = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
+      printf ("Total time = %f seconds cps %f\n", (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec), (PIPE*reps)/secs);
+      exit(1);
+    //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
+    //printf( " %d gets time taken %f cps %f \n ", NUM*100, taken, (NUM*128)/taken );
+    }
   }
+
   //struct iovec *iov = malloc( sizeof(struct iovec) );
   //iov->iov_base = buf;
   //iov->iov_len  = nread;
@@ -69,38 +88,26 @@ int main() {
   signal(SIGINT, sig_handler);
   signal(SIGTERM, sig_handler);
   
-  loop = createLoop(sig_handler);
-  int fd = mrConnect(loop,"localhost", 11211, on_data);
-  //addTimer(loop, 10, on_timer);
+  loop = mr_create_loop(sig_handler);
+  int fd = mr_connect(loop,"localhost", 11211, on_data);
 
   //char buf[256];
   char *buf;
   struct iovec iov;
-  //buf = "set test 0 0 5\r\nbench\r\n";
-  //iov.iov_base = buf;
-  //iov.iov_len = strlen(buf);
-  //mrWritevf( loop, fd, &iov, 1 );
 
   buf = "get test\r\n";
-  //iov.iov_base = buf;
-  //iov.iov_len = strlen(buf);
-  //mrWritev( loop, fd, &iov, 1 );
 
   for( int i = 0; i < PIPE; i++ ) {
     iovs[i].iov_base = buf;
     iovs[i].iov_len = strlen(buf);
   }
   start_time = clock();
-  for( int i = 0; i < NUM; i++ ) {
-    mrWritev( loop, fd, iovs, 100 );
-  }
+  gettimeofday(&tv1, NULL);
+  mr_writev( loop, fd, iovs, PIPE );
+  mr_flush(loop);
 
-  //struct iovec iov2;
-  //iov2.iov_base = p;
-  //iov2.iov_len = 10;
-  //mrWritev( loop, fd, &iov2, 1 );
 
-  runLoop(loop);
-  freeLoop(loop);
+  mr_run(loop);
+  mr_free(loop);
 
 }

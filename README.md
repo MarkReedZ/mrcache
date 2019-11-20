@@ -4,16 +4,22 @@ Mrcache is a key value store ala memcached with support for compression and usin
 # Benchmarks
 
 ```
-GET
+GET - 10B
 
 pipelining
-mrcache (iouring) 2.5m
-redis             1.5m
-memcached         700k
+  mrcache (iouring) 4.6m
+  redis             1.2m
+  memcached         700k
 
 no pipelining
-mrcache (iouring) 380k
-mrcache (epoll)   200k
-redis             240k
+  mrcache (iouring) 215k
+  redis             112k
+  mrcache (epoll)   100k
+
+GET - 100kb
+
+  memcached          38k
+  mrcache (iouring)  36k
+  redis              10k
 
 ```
