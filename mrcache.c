@@ -37,7 +37,7 @@ unsigned long tot = 0;
 static mr_loop_t *loop = NULL;
 struct settings settings;
 
-hashtable_t *mrq_ht;
+hashtable_t *mrq_ht, *mrq_htnew;
 
 #define NUM_IOVEC 256
 typedef struct _conn
@@ -469,7 +469,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         return;
       }
 
-      DBG_READ printf("get key >%.*s<\n", keylen, key );
+      DBG_READ printf("get key %d >%.*s<\n", keylen, keylen, key );
       unsigned long hv = CityHash64(key, keylen);      
       item *it = ht_find(mrq_ht, key, keylen, hv);
 
@@ -510,13 +510,13 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         }
       } else {
 
-        int n =  conn_write_buffer( conn, resp_get_not_found, resp_get_not_found_len );
+        int n =  conn_write_buffer( conn, resp_get_not_found,   resp_get_not_found_len );
         if ( n ) conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
 
         DBG_READ printf("getkey - not found\n");
       }
 
-      //printf(" dl %d\n",data_left);
+      p += 4 + keylen;
       data_left -= 4 + keylen;
       num_writes += 1;
 

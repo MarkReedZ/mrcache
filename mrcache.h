@@ -5,6 +5,7 @@
 #include "mrloop.h"
 
 extern hashtable_t *mrq_ht;
+extern hashtable_t *mrq_htnew;
 
 enum cmds {
   GET = 1,

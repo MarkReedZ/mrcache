@@ -71,7 +71,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
 
   //printf("on_data sz %d\n", nread );
 
-/*
+
   int left = nread;
   char *p = buf;
   if ( needs ) {
@@ -91,7 +91,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
     //exit(-1);
   }
 
-  while ( 0 ) {
+  while ( left ) {
     //printf( " itemcnt %d buf ", itemcnt); print_buffer( p, 16 ); //printf("\n");
     if ( left < 6 ) { leftover = left; needs = 6; memcpy( cbufp, p, left ); cbufp += left; return; }
     if ( p[0] != 0 && p[1] != 1 ) {
@@ -140,7 +140,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
     itemcnt += 1;
     left -= sz+6;
   }
-*/ 
+
   //printf("bytes %d vs %d\n",bytes, PIPE*resp_len*100);
   if ( bytes >= PIPE*resp_len*99 ) {
     itemcnt = 0;
@@ -247,8 +247,10 @@ int main() {
   foo[l] = 0;
   
   set(fd,"test11", foo);
+  //set(fd,"test1234567890123456789012345678", foo);
   gettimeofday(&tv1, NULL);
   setup_iovs(fd, "test11");
+  //setup_iovs(fd, "test1234567890123456789012345678");
   //get64test(fd);
   mr_run(loop);
   mr_free(loop);

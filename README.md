@@ -1,5 +1,5 @@
 # mrcache
-Mrcache is a key value store ala memcached with support for compression and using disk.  It requires linux kernel 5.3+ as it uses io_uring which is almost twice as fast as epoll.
+Mrcache is a key value store ala memcached with support for compression and disk.  It requires linux kernel 5.3+ as it uses io_uring which is 2-4x faster than epoll.
 
 # Benchmarks
 

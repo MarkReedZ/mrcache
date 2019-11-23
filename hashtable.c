@@ -21,26 +21,65 @@ void ht_init(hashtable_t *ht) {
 }
 
 
+int ht_resize_timer( void *htt ) {
+  hashtable_t *ht = htt;
+  double start_time = clock();
+  int max = ht->new_idx + 50000;
+  if ( max > ht->maxSize ) max = ht->maxSize;
+  for ( int i = ht->new_idx; i < max; i++ ) {
+
+    // TODO if item is on disk still need to copy
+    item *it = blocks_translate(ht->tbl[i]);
+    if (it) {
+      char *itkey = it->data+it->size;
+      unsigned long hv = CityHash64(itkey, it->keysize);
+      ht_insert_new( ht, ht->tbl[i], itkey, it->keysize, hv );
+    }
+  }
+  ht->new_idx = max;
+  double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
+  printf( " resize timer tick took %f max %d sz %d \n ", taken, max, ht->maxSize);
+
+  if ( max >= ht->maxSize ) {
+    // We're done
+    free(ht->tbl); ht->tbl = ht->newtbl; ht->newtbl = NULL;
+    ht->maxSize <<= 1;
+    ht->growthSize = ht->maxSize * 0.80;
+    ht->size = ht->new_size;
+    ht->mask = ht->new_mask;
+    ht->resizing = false;
+    printf(" done resizing %d %d\n", ht->size, ht->growthSize);
+    return 0; // Stop the timer
+  }
+  return 1; 
+}
+
 void ht_resize(hashtable_t *ht) {
 
-  uint32_t oldsz = ht->maxSize;
-  ht->maxSize <<= 1;
+  if ( ht->resizing ) return;
+  ht->resizing = true;
+  //uint32_t oldsz = ht->maxSize;
+  //ht->maxSize <<= 1;
 
-  uint64_t *p = calloc( ht->maxSize, sizeof(uint64_t));
+  uint64_t *p = calloc( ht->maxSize << 1, sizeof(uint64_t));
   if ( !p ) {
     ht->maxSize >>= 1;
-    printf("oom\n");
+    printf("oom\n");  // TODO
     exit(-1);
   }
+  ht->newtbl = p;
+  ht->new_mask = (ht->maxSize<<1) - 1;
+  ht->new_idx  = 0;
+  ht->new_size = 0;
 
-  uint64_t *oldtbl = ht->tbl;
-  ht->tbl = p;
+  //ht->mask = ht->maxSize - 1;
+  //ht->size = 0;
+  //ht->growthSize = ht->maxSize * 0.80;
 
-  ht->mask = ht->maxSize - 1;
-  ht->size = 0;
-  ht->growthSize = ht->maxSize * 0.80;
+  // Resize, and if we're not done add a timer to continue
+  if (ht_resize_timer( ht )) mr_add_timer( settings.loop, 0.01, ht_resize_timer, (void*)ht );
 
-  // Copy items..
+/*
   double start_time = clock();
 
   for ( int i = 0; i < oldsz; i++ ) {
@@ -55,7 +94,7 @@ void ht_resize(hashtable_t *ht) {
 
   double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
   printf( " resize time taken %f \n ", taken);
-
+*/
 }
 
 
@@ -101,10 +140,12 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
 // TODO Can pass in the item to avoid an extra translate
 void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
   DBG_SET printf("ht_insert blkadr 0x%lx key >%.*s<\n", blockAddr, keylen, key);
+
+  if ( unlikely(ht->newtbl) ) ht_insert_new( ht, blockAddr, key, keylen, hv );
+
   uint32_t hash = hv & ht->mask;
   uint32_t perturb = hash;
 
-  // TODO if dummy slot we can install
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
     char *itkey = it->data+it->size;
@@ -115,14 +156,38 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
     perturb >>= 5;
     hash = (hash*5 + perturb + 1) & ht->mask;
 
-    // if 0 or if LRU'd block 
+    // if 0 or an LRU'd block we can install here TODO wouldn't blocks translate just return null breaking us out?
     if ( !blocks_isvalid(ht->tbl[hash])  ) break;
     it = blocks_translate(ht->tbl[hash]);
   }
   DBG_SET printf("ht_insert hash 0x%08x \n", hash );
   ht->tbl[hash] = blockAddr;
+      
   ht->size += 1;
   if ( ht->size > ht->growthSize ) ht_resize(ht);
+
+}
+void ht_insert_new(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
+
+  uint32_t hash = hv & ht->new_mask;
+  uint32_t perturb = hash;
+
+  item *it = blocks_translate(ht->newtbl[hash]);
+
+  while (it) {
+    char *itkey = it->data+it->size;
+    if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
+      ht->newtbl[hash] = blockAddr; // Use the new item location
+      return;
+    }
+    perturb >>= 5;
+    hash = (hash*5 + perturb + 1) & ht->new_mask;
+
+    it = blocks_translate(ht->newtbl[hash]);
+  }
+
+  ht->newtbl[hash] = blockAddr;
+  ht->new_size += 1;
 
 }
 

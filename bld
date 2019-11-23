@@ -5,7 +5,7 @@
 #CFLAGS='-g'
 CFLAGS='-O3'
 gcc -c mrcache.c -o mrcache.o ${CFLAGS}
-gcc -c mrcache_ae.c -o mrcache_ae.o ${CFLAGS}
+#gcc -c mrcache_ae.c -o mrcache_ae.o ${CFLAGS}
 gcc -c hashtable.c -o hashtable.o ${CFLAGS}
 gcc -c blocks.c -o blocks.o ${CFLAGS}
 gcc -c city.c -o city.o ${CFLAGS}
