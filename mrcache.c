@@ -614,7 +614,7 @@ static void usage(void) {
   printf( "Mrcache Version 0.1\n"
           "    -h, --help                    This help\n"
           "    -p, --port=<num>              TCP port to listen on (default: 7000)\n"
-          "    -m, --max-socket=<megabytes>  Maximum amount of memory in mb (default: 256)\n"
+          "    -m, --max-memory=<megabytes>  Maximum amount of memory in mb (default: 256)\n"
           "    -z, --zstd                    Enable zstd compression in memory\n"
           "\n"
         );

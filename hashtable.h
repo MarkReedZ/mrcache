@@ -31,5 +31,5 @@ void   ht_delete(hashtable_t *ht, uint64_t hv);
 void   ht_decrement(hashtable_t *ht, int num);
 
 void   ht_resize(hashtable_t *ht );
-int ht_resize_timer(void *ht );
+int    ht_resize_timer(void *ht );
 void   ht_insert_new(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv);
