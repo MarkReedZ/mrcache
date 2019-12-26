@@ -77,6 +77,14 @@ static void setup() {
   mrq_ht = malloc( sizeof(hashtable_t) );
   ht_init(mrq_ht);
   blocks_init();
+
+  char *k = "0123456";
+  printf("0: %lx\n", CityHash64(k, 1));      
+  printf("1: %lx\n", CityHash64(k+1, 1));      
+  printf("2: %lx\n", CityHash64(k+2, 1));      
+  printf("3: %lx\n", CityHash64(k+3, 1));      
+  printf("4: %lx\n", CityHash64(k+4, 1));      
+  printf("01: %lx\n", CityHash64(k, 2));      
 }
 
 static void print_buffer( char* b, int len ) {

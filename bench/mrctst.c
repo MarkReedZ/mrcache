@@ -7,7 +7,7 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 2*1024*1024
 #define NUM 1000
-#define PIPE 1
+#define PIPE 32
 static int bytes = 0;
 static int bw = 0;
 static struct iovec iovs[PIPE];
@@ -144,7 +144,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
       if ( reps >= NUM ) {
         gettimeofday(&tv2, NULL);
         double secs = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
-        printf ("Total time = %f seconds cps %f\n", (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec), (PIPE*reps*100)/secs);
+        printf ("Total time = %f seconds cps %f\n", (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec), (PIPE*reps)/secs);
         mr_close(loop, fd);
         exit(1);
       }

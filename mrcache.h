@@ -29,7 +29,6 @@ extern struct settings settings;
 typedef struct _conn my_conn_t;
 
 typedef struct __attribute__((__packed__)) _item {
-  void *next;
   uint16_t keysize;
   uint32_t size;
   char data[];
