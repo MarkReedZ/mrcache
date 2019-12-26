@@ -7,20 +7,20 @@ Mrcache is a key value store ala memcached with support for compression and disk
 GET - 16B
 
 pipelining
-  mrcache (io_uring) 100.6m
+  mrcache (io_uring)  4.6m
   redis               1.2m
   memcached           700k
 
 no pipelining
-  mrcache (io_uring)  2.5m
+  mrcache (io_uring)  215k
   redis               112k
   mrcache (epoll)     100k
 
 GET - 100kb
 
-  mrcache (io_uring)   1.6m
-  memcached             38k
-  redis                 10k
+  mrcache (io_uring)   36k
+  memcached            38k
+  redis                10k
 
 ```
 
@@ -40,5 +40,3 @@ Mrcache Version 0.1
     -m, --max-memory=<megabytes>  Maximum amount of memory in mb (default: 256)
     -z, --zstd                    Enable zstd compression in memory
 ```
-
-
