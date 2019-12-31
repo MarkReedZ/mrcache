@@ -1,4 +1,5 @@
 
+
 #include "mrloop.h"
 
 #include <sys/time.h>
@@ -6,14 +7,16 @@ static struct timeval  tv1, tv2;
 
 
 #define BUFSIZE 2*1024*1024
-#define NUM 100
-#define PIPE 32
+#define NUM 10000
+#define PIPE 64
 static int bytes = 0;
 static int bw = 0;
 static struct iovec iovs[PIPE];
 static int reps = 0;
 int resp_len = 10;
 static char buf2[2*1024*1024];
+static char obuf[2*1024*1024];
+static int olen = 0;
 
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
@@ -61,14 +64,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
     printf(" errno %d %s\n",errno, strerror(errno));
     return;
   }
-  //printf("on_data+6 >%.*s<\n", nread-6, buf+6);
-  //printf("on_data %d >%.*s<\n", nread, nread > 128 ? 128 : nread, buf);
-  //printf("on_data sz %d >%.*s<\n", nread, nread-6, buf+6);
-  //exit(1);
   //print_buffer( buf, nread ); printf("\n");
-
-
-
   //printf("on_data sz %d\n", nread );
 
 
@@ -113,25 +109,29 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
     if ( left < sz+6 ) { leftover = left; needs = sz+6; memcpy( cbufp, p-2, left ); cbufp += left; return; }
     p += 4;
 
-    if (resp_len==10) {
-      if ( p[0] != 102 && p[1] != 97 &&
-          p[2] != 114 && p[3] != 116 ) {
-        printf(" argh not fart left %d ",left); print_buffer(p-6, left+6); 
-        printf(" Num bytes read %d written %d\n", bytes,bw);
-        mr_close(loop, fd);
-        exit(-1);
-      }
-    }
-    for (int i = 0; i < sz; i++ ) {
-      if ( p[i] != 0x61 ) {
-        printf(" argh not all As i %d left %d ",i, left); print_buffer(p+i-6, 16); 
-        printf(" Num bytes read %d written %d\n", bytes,bw);
-        mr_close(loop, fd);
-        mr_stop(loop);
-        return;
-      }
-    }
+    // Test the output
+    if ( 0 ) {
 
+      if (resp_len==10) {
+        if ( p[0] != 102 && p[1] != 97 &&
+            p[2] != 114 && p[3] != 116 ) {
+          printf(" argh not fart left %d ",left); print_buffer(p-6, left+6); 
+          printf(" Num bytes read %d written %d\n", bytes,bw);
+          mr_close(loop, fd);
+          exit(-1);
+        }
+      }
+      for (int i = 0; i < sz; i++ ) {
+        if ( p[i] != 0x61 ) {
+          printf(" argh not all As i %d left %d ",i, left); print_buffer(p+i-6, 16); 
+          printf(" Num bytes read %d written %d\n", bytes,bw);
+          mr_close(loop, fd);
+          mr_stop(loop);
+          return;
+        }
+      }
+    }
+  
     p += sz;
     //if ( itemcnt == 21 ) print_buffer( p, left ); //printf("\n");
     //printf( " after itemcnt %d buf ", itemcnt+1); print_buffer( p, 16 ); //printf("\n");
@@ -139,8 +139,25 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
     if ( left < (sz+6) ) { leftover = left; return; }
     itemcnt += 1;
     left -= sz+6;
+
+    if ( (itemcnt % PIPE) == 0 ) {
+      reps += 1;
+      if ( reps >= NUM ) {
+        gettimeofday(&tv2, NULL);
+        double secs = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
+        printf ("Total time = %f seconds cps %f\n", (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec), (PIPE*reps)/secs);
+        mr_close(loop, fd);
+        exit(1);
+      }
+      int n = write( fd, obuf, olen );
+      if ( n != olen ) {
+        printf("ERROR n is %d len is %d\n",n, olen);
+        exit(1);
+      }
+    }
   }
 
+/*
   //printf("bytes %d vs %d\n",bytes, PIPE*resp_len*100);
   if ( bytes >= PIPE*resp_len*99 ) {
     itemcnt = 0;
@@ -161,7 +178,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
 
     }
   }
-
+*/
   //printf("on_data\n"); // fd %d >%.*s<\n", ((conn_t*)conn)->fd, nread, buf);
   //print_buffer( buf, nread );
   //struct iovec *iov = malloc( sizeof(struct iovec) );
@@ -195,10 +212,12 @@ void set(int fd, const char *key, char *val) {
 
   printf(" val len %d\n", strlen(val));
 
-  struct iovec iov;
-  iov.iov_base = p;
-  iov.iov_len = 8 + strlen(val) + strlen(key);
-  mr_writevf( loop, fd, &iov, 1 );
+  write(fd, p, 8 + strlen(val) + strlen(key));
+
+  //struct iovec iov;
+  //iov.iov_base = p;
+  //iov.iov_len = 8 + strlen(val) + strlen(key);
+  //mr_writevf( loop, fd, &iov, 1 );
 
 }
 void setup_iovs(int fd, const char *key) {
@@ -223,6 +242,23 @@ void setup_iovs(int fd, const char *key) {
     mr_flush(loop);
 
 }
+void setup_buf(int fd, const char *key) {
+  char tmp[16*1024];
+  char *p = tmp;
+  p[0] = 0;
+  p[1] = 1;
+  uint16_t *keylen = (uint16_t*)(p+2);
+  *keylen = strlen(key);
+  strcpy( p + 4, key );
+  int l = 4 + strlen(key);
+
+  p = obuf;
+  
+  for( int i = 0; i < PIPE; i++ ) {
+    memcpy( p, tmp, l );
+    p += l;
+  }
+}  
 
 int main() {
 
@@ -240,16 +276,27 @@ int main() {
   //char foo[1024*1024] = "On then sake home is am leaf. Of suspicion do departure at extremely he believing. Do know said mind do rent they oh hope of. General enquire picture letters garrets on offices of no on. Say one hearing between excited evening all inhabit thought you. Style begin mr heard by in music tried do. To unreserved projection no introduced invitation.  Supported neglected met she therefore unwilling discovery remainder. Way sentiments two indulgence uncommonly own. Diminution to frequently sentiments he connection continuing indulgence. An my exquisite conveying up defective. Shameless see the tolerably how continued. She enable men twenty elinor points appear. Whose merry ten yet was men seven ought balls.  It allowance prevailed enjoyment in it. Calling observe for who pressed raising his. Can connection instrument astonished unaffected his motionless preference. Announcing say boy precaution unaffected difficulty alteration him. Above be would at so going heard. Engaged at village at am equally proceed. Settle nay length almost ham direct extent. Agreement for listening remainder get attention law acuteness day. Now whatever surprise resolved elegance indulged own way outlived.  Whole every miles as tiled at seven or. Wished he entire esteem mr oh by. Possible bed you pleasure civility boy elegance ham. He prevent request by if in pleased. Picture too and concern has was comfort. Ten difficult resembled eagerness nor. Same park bore on be. Warmth his law design say are person. Pronounce suspected in belonging conveying ye repulsive.  Difficulty on insensible reasonable in. From as went he they. Preference themselves me as thoroughly partiality considered on in estimating. Middletons acceptance discovered projecting so is so or. In or attachment inquietude remarkably comparison at an. Is surrounded prosperous stimulated am me discretion expression. But truth being state can she china widow. Occasional preference fat remarkably now projecting uncommonly dissimilar. Sentiments projection particular companions interested do at my delightful. Listening newspaper in advantage frankness to concluded unwilling.  If wandered relation no surprise of screened doubtful. Overcame no insisted ye of trifling husbands. Might am order hours on found. Or dissimilar companions friendship impossible at diminution. Did yourself carriage learning she man its replying. Sister piqued living her you enable mrs off spirit really. Parish oppose repair is me misery. Quick may saw style after money mrs.  Blind would equal while oh mr do style. Lain led and fact none. One preferred sportsmen resolving the happiness continued. High at of in loud rich true. Oh conveying do immediate acuteness in he. Equally welcome her set nothing has gravity whether parties. Fertile suppose shyness mr up pointed in staying on respect.  That know ask case sex ham dear her spot. Weddings followed the all marianne nor whatever settling. Perhaps six prudent several her had offence. Did had way law dinner square tastes. Recommend concealed yet her procuring see consulted depending. Adieus hunted end plenty are his she afraid. Resources agreement contained propriety applauded neglected use yet.  Lose away off why half led have near bed. At engage simple father of period others except. My giving do summer of though narrow marked at. Spring formal no county ye waited. My whether cheered at regular it of promise blushes perhaps. Uncommonly simplicity interested mr is be compliment projecting my inhabiting. Gentleman he september in oh excellent.  Any delicate you how kindness horrible outlived servants. You high bed wish help call draw side. Girl quit if case mr sing as no have. At none neat am do over will. Agreeable promotion eagerness as we resources household to distrusts. Polite do object at passed it is. Small for ask shade water manor think men begin. ";
   //printf("DELME %d\n",strlen(foo));
   char foo[1024*1024];
-  int l = 100;
+  //int l = 100*1024;
+  int l = 10;
   for ( int x = 0; x < l; x++ ) {
     foo[x] = 97;
   }
   foo[l] = 0;
+
+  char *key = "test11";
   
-  set(fd,"test11", foo);
+  set(fd, key, foo);
   //set(fd,"test1234567890123456789012345678", foo);
   gettimeofday(&tv1, NULL);
-  setup_iovs(fd, "test11");
+  //setup_iovs(fd, "test11");
+  setup_buf(fd, key);
+  olen = PIPE*(4+strlen(key));
+  int n = write( fd, obuf, olen );
+  //print_buffer( obuf, 64 ); printf("\n"); exit(1);
+  if ( n != olen ) {
+    printf("ERROR n is %d len is %d\n",n, olen);
+    exit(1);
+  }
   //setup_iovs(fd, "test1234567890123456789012345678");
   //get64test(fd);
   mr_run(loop);

@@ -4,7 +4,7 @@ Mrcache is a key value store ala memcached with support for compression and disk
 # Benchmarks
 
 ```
-GET - 10B
+GET - 16B
 
 pipelining
   mrcache (io_uring)  4.6m
@@ -18,15 +18,15 @@ no pipelining
 
 GET - 100kb
 
-  memcached            38k
   mrcache (io_uring)   36k
+  memcached            38k
   redis                10k
 
 ```
 
 # Dependencies
 
-* Linux kernel version 5.2+
+* Linux kernel version 5.4+
 * https://github.com/MarkReedZ/mrloop - io_uring based C event loop
 
 # Usage

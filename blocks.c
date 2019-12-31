@@ -26,7 +26,6 @@ static int fsblock_size;
 static int fsblock_min_block;
 static int num_fs_blocks;
 
-
 void blocks_init() {
   num_blocks = settings.max_memory;
   base = malloc( num_blocks * 1024 * 1024 );
@@ -64,11 +63,11 @@ uint64_t blocks_alloc( int sz ) {
   // If we're going into the next block
   if ( (cur_block_size+sz) > 0xFFFFF ) {
 
-    //printf("DELME crossing to a new block old block %d num items %d\n", cur_block%num_blocks, items_in_block[ cur_block%num_blocks ]);
     if ( full ) blocks_lru();
     else if ( cur_block == num_blocks-1 ) full = true;
 
     cur_block += 1;
+    items_in_block[ cur_block%num_blocks ] = 0; // TODO delme?
     cur = base + ((cur_block%num_blocks)<<20);
     cur_block_size = 0;
 
@@ -84,7 +83,6 @@ uint64_t blocks_alloc( int sz ) {
 void blocks_lru() {
   int i = min_block%num_blocks;
   int n = items_in_block[ i ];
-  //printf("DELME lru block %d num items %d\n", min_block,n );
 
   if ( settings.disk_size ) {
     blocks_fs_write(i);
@@ -106,22 +104,25 @@ void *blocks_translate( uint64_t blockAddr ) {
   return (base + ((blk%num_blocks)<<20)) + off;
 }
 
-bool blocks_isvalid( int block ) {
-  if ( block < min_block ) return false;
+bool blocks_isvalid( uint64_t blockAddr ) {
+  uint64_t blk = blockAddr >> BLOCK_SHIFT;
+  if ( blk < min_block ) return false;
   return true;
 }
 
 bool blocks_isNearLru( uint64_t blockAddr ) {
   if ( !full ) return false;
   uint64_t blk = blockAddr >> BLOCK_SHIFT;
-  //printf(" DELME blk %d min %d\n", blk, min_block);
   if ( blk < (min_block + 4) ) return true;
   return false;
 }
 
 void blocks_decrement( uint64_t blockAddr ) {
   uint64_t blk = blockAddr >> BLOCK_SHIFT;
-  items_in_block[ blk ] -= 1;
+  items_in_block[ blk%num_blocks ] -= 1;
+}
+uint32_t blocks_num( uint64_t blk ) {
+  return items_in_block[ blk%num_blocks ];
 }
 
 bool blocks_isInvalid( uint64_t blockAddr ) {
@@ -150,7 +151,6 @@ void blocks_fs_write( int blk ) {
   mr_flush(settings.loop);
 
   if ( fsblock_size == 64 ) {
-    printf(" DELME fsblock %d full\n", fsblock_index);
     fsblock_index = (fsblock_index+1)%num_fs_blocks;
     fsblock_size = 0;
     fsblock_min_block += 64;
@@ -158,11 +158,4 @@ void blocks_fs_write( int blk ) {
   }
 
 }
-
-// TODO
-// Read - blk-low/64 is the fsblock. %64 is the 1mb then addr
-//      - Read into the output buffer? Sure keep count of reads outstanding and don't flush until its 0. 
-//      - If buffer full read into temp buffer and queue.  When we get to one of these and the read is outstanding we stop and set flag.
-//        In the read done callback if the flag is set we copy into the output buffer and continue processing that queue. 
-//        
 

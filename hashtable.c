@@ -9,9 +9,9 @@
 void ht_init(hashtable_t *ht) {
 
   ht->size = 0;
-  ht->maxSize = (uint64_t)1 << 13;
+  ht->maxSize = (uint64_t)1 << 20;
   ht->mask = ht->maxSize - 1;
-  ht->growthSize = ht->maxSize * 0.80;
+  ht->growthSize = ht->maxSize * 0.70;
 
   ht->tbl = calloc( ht->maxSize, sizeof(uint64_t));
   if (!ht->tbl) {
@@ -44,7 +44,7 @@ int ht_resize_timer( void *htt ) {
     // We're done
     free(ht->tbl); ht->tbl = ht->newtbl; ht->newtbl = NULL;
     ht->maxSize <<= 1;
-    ht->growthSize = ht->maxSize * 0.80;
+    ht->growthSize = ht->maxSize * 0.70;
     ht->size = ht->new_size;
     ht->mask = ht->new_mask;
     ht->resizing = false;
@@ -58,8 +58,6 @@ void ht_resize(hashtable_t *ht) {
 
   if ( ht->resizing ) return;
   ht->resizing = true;
-  //uint32_t oldsz = ht->maxSize;
-  //ht->maxSize <<= 1;
 
   uint64_t *p = calloc( ht->maxSize << 1, sizeof(uint64_t));
   if ( !p ) {
@@ -72,36 +70,29 @@ void ht_resize(hashtable_t *ht) {
   ht->new_idx  = 0;
   ht->new_size = 0;
 
-  //ht->mask = ht->maxSize - 1;
-  //ht->size = 0;
-  //ht->growthSize = ht->maxSize * 0.80;
-
   // Resize, and if we're not done add a timer to continue
   if (ht_resize_timer( ht )) mr_add_timer( settings.loop, 0.01, ht_resize_timer, (void*)ht );
 
-/*
-  double start_time = clock();
-
-  for ( int i = 0; i < oldsz; i++ ) {
-    item *it = blocks_translate(oldtbl[i]);
-    if (it) {
-      char *itkey = it->data+it->size;
-      unsigned long hv = CityHash64(itkey, it->keysize);
-      ht_insert( ht, oldtbl[i], itkey, it->keysize, hv );
-    }
-  }
-  free(oldtbl);
-
-  double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
-  printf( " resize time taken %f \n ", taken);
-*/
 }
 
+/*
+When using disk:
+
+  We'll keep the last 2 bytes of each key to reduce the number of disk reads
+  Create an array to hold block addresses on disk
+    no array just loop twice
+  Loop until invalid block adding items on disk to the array and checking those in mem.
+  If miss in memory kick off reads for each item on disk that matches the last 2 bytes of key
+    malloc a struct with the key and such then pass it to each disk read
+      this struct has to be queued up to hold the output buffer
+    if all reads come back and missed we return a miss
+      if we timeout return a miss
+
+*/
 
 item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
 
   uint32_t hash = hv & ht->mask;
-  uint32_t perturb = hash;
   DBG_SET printf("ht_find hash 0x%08x \n", hash );
 
   item *it = blocks_translate(ht->tbl[hash]);
@@ -109,6 +100,7 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
     DBG_SET printf("ht_find hash 0x%08x \n", hash );
     char *itkey = it->data+it->size;
     if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
+      
       /*
       // If near lru block update ht->tbl[hash] and return it
       if ( blocks_isNearLru(ht->tbl[hash])) {
@@ -128,8 +120,7 @@ item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
       ht->lastBlock = GET_BLOCK(ht->tbl[hash]);
       return it;
     }
-    perturb >>= 5;
-    hash = (hash*5 + perturb + 1) & ht->mask;
+    hash = (hash + 1) & ht->mask;
     if ( ht->tbl[hash] == 0 ) break;
     it = blocks_translate(ht->tbl[hash]);
   }
@@ -144,17 +135,19 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
   if ( unlikely(ht->newtbl) ) ht_insert_new( ht, blockAddr, key, keylen, hv );
 
   uint32_t hash = hv & ht->mask;
-  uint32_t perturb = hash;
 
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
     char *itkey = it->data+it->size;
     if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
+      blocks_decrement(ht->tbl[hash]);
+  
+      uint64 blk = ht->tbl[hash] >> BLOCK_SHIFT;
       ht->tbl[hash] = blockAddr; // Use the new item location
+      blk = ht->tbl[hash] >> BLOCK_SHIFT;
       return;
     }
-    perturb >>= 5;
-    hash = (hash*5 + perturb + 1) & ht->mask;
+    hash = (hash + 1) & ht->mask;
 
     // if 0 or an LRU'd block we can install here TODO wouldn't blocks translate just return null breaking us out?
     if ( !blocks_isvalid(ht->tbl[hash])  ) break;
@@ -170,7 +163,6 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
 void ht_insert_new(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
 
   uint32_t hash = hv & ht->new_mask;
-  uint32_t perturb = hash;
 
   item *it = blocks_translate(ht->newtbl[hash]);
 
@@ -180,8 +172,7 @@ void ht_insert_new(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keyl
       ht->newtbl[hash] = blockAddr; // Use the new item location
       return;
     }
-    perturb >>= 5;
-    hash = (hash*5 + perturb + 1) & ht->new_mask;
+    hash = (hash + 1) & ht->new_mask;
 
     it = blocks_translate(ht->newtbl[hash]);
   }
@@ -201,7 +192,6 @@ void ht_decrement(hashtable_t *ht, int n) {
 /*
 void ht_delete(hashtable_t *ht, uint64_t hv) {
   uint32_t hash = hv & ht->mask;
-  uint32_t perturb = hash;
 
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
@@ -211,8 +201,7 @@ void ht_delete(hashtable_t *ht, uint64_t hv) {
       ht->size -= 1;
       free(it);
     }
-    perturb >>= 5;
-    hash = (hash*5 + perturb + 1) & ht->mask;
+    hash = (hash + 1) & ht->mask;
     if ( ht->tbl[hash] == 0 ) break;
     it = blocks_translate(ht->tbl[hash]);
   }
