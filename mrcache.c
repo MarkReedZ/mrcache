@@ -85,6 +85,15 @@ static void setup() {
   printf("3: %lx\n", CityHash64(k+3, 1));      
   printf("4: %lx\n", CityHash64(k+4, 1));      
   printf("01: %lx\n", CityHash64(k, 2));      
+
+  k = "test129845";
+  unsigned long hv = CityHash64(k, 10);
+  printf("test129845: %lx\n", CityHash64(k, 10));      
+  k = "test277238";
+  hv = CityHash64(k, 10);
+  printf("test277238: %lx\n", CityHash64(k, 10));      
+  //exit(1);
+  
 }
 
 static void print_buffer( char* b, int len ) {
@@ -146,11 +155,9 @@ static void test_data( my_conn_t *c, char *in, int sz ) {
   blen += sz;
   bp += sz;
 
-  if ( blen > 256*1024*1024 ) { printf(" DELME more than 256m \n"); exit(1); }
 
   if ( blen < 6 ) return;
 
-  //DELME printf("  blen %d sz %d\n", blen, sz);
   while ( (p-buf) < (blen-6) ) {
 
     if ( p[0] != 0 ) { printf(" p0 is not 0\n"); goto prt; }
@@ -227,7 +234,7 @@ static int conn_write_buffer( my_conn_t* conn, char *buf, int bsz ) {
     if ( !conn_flush(conn) ) {
       // If we were unable to write out the whole buffer do so later
       if ( bsz-sz == 0 ) {
-        printf("DELME Yeah we can't return 0 here!\n");
+        printf("TODO Yeah we can't return 0 here!\n");
         exit(1);
       }
       return bsz-sz; 
@@ -312,7 +319,6 @@ static void conn_process_queue( my_conn_t *conn ) {
         qi->buf = p;
         qi->cur = n;
         qi->sz  = it->size+4-n;
-        //printf("DELME return from pq due to stall\n");
         return;
       } 
 
@@ -423,7 +429,6 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
 
   // TODO close in mr loop and have a closed callback
   if ( nread < 0 ) { 
-    printf(" DELME client closed the connection \n");
     free_conn(c);
     return;
   }
@@ -561,7 +566,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
 
         //if ( ZSTD_isError(rc) ) {
           //const char *err = ZSTD_getErrorName(rc);
-          //printf("DELME zstd error %s\n", err );
+          //printf("TODO zstd error %s\n", err );
           //exit(1);
         //}
 

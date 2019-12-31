@@ -7,7 +7,7 @@ static struct timeval  tv1, tv2;
 
 
 #define BUFSIZE 2*1024*1024
-#define NUM 1000
+#define NUM 10000
 #define PIPE 64
 static int bytes = 0;
 static int bw = 0;
