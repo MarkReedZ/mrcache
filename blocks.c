@@ -119,7 +119,7 @@ bool blocks_isvalid( uint64_t blockAddr ) {
   return true;
 }
 
-bool blocks_isNearLru( uint64_t blockAddr ) {
+bool blocks_is_near_lru( uint64_t blockAddr ) {
   if ( !full ) return false;
   uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < (min_block + 4) ) return true;
@@ -134,26 +134,26 @@ uint32_t blocks_num( uint64_t blk ) {
   return items_in_block[ blk%num_blocks ];
 }
 
-bool blocks_isInvalid( uint64_t blockAddr ) {
+bool blocks_is_invalid( uint64_t blockAddr ) {
   uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < min_block ) return true;
   return false;
 }
 
 // Only call this if you know its not mem
-bool blocks_isDisk( uint64_t blockAddr ) {
+bool blocks_is_disk( uint64_t blockAddr ) {
   uint64_t blk = GET_BLOCK(blockAddr);
   //if ( blk >= fsblock_min_block ) return true;
   if ( blk < min_block && blk >= fsblock_min_block ) return true;
   return false;
 }
 
-bool blocks_isMem( uint64_t blockAddr ) {
+bool blocks_is_mem( uint64_t blockAddr ) {
   uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk >= min_block ) return true;
   return false;
 }
-bool blocks_isLru( uint64_t blockAddr ) {
+bool blocks_is_lru( uint64_t blockAddr ) {
   uint64_t blk = GET_BLOCK(blockAddr);
   //if ( blk < min_block && blk >  ) return true;
   if ( blk < fsblock_min_block ) return true; // When not using disk fsblock min needs to be equal to min_block

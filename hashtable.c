@@ -13,10 +13,10 @@ void ht_init(hashtable_t *ht, uint32_t sz) {
   printf(" index_len %d\n", index_len);
   ht->mask = index_len - 1;
   printf(" htmask %x\n", ht->mask);
-  ht->maxSize = index_len * 0.70;
-  printf(" max items %d\n", ht->maxSize);
+  ht->max_size = index_len * 0.70;
+  printf(" max items %d\n", ht->max_size);
   ht->size = 0;
-  ht->indexSize = index_len;
+  ht->index_size = index_len;
 
   ht->tbl = calloc( index_len+1, sizeof(uint64_t));
   if (!ht->tbl) {
@@ -40,14 +40,14 @@ int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **out
       settings.read_shifts += 1;
       char *itkey = it->data+it->size;
       if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
-        ht->lastBlock = GET_BLOCK(blockAddress);
+        ht->last_block = GET_BLOCK(blockAddress);
         *outptr = it;
         return 1;
       }
     } else {
       
       // Disk
-      if ( blocks_isDisk(blockAddress) ) {
+      if ( blocks_is_disk(blockAddress) ) {
 
         // Only read from disk if the index key bits match
         if ( (key[keylen-1]&0xF) == GET_KEY(blockAddress) ) {
@@ -115,7 +115,7 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
 
     // if 0 or an LRU'd block we can install here TODO wouldn't blocks translate just return null breaking us out?
     // TODO This will become if disk increment until not?
-    if ( !blocks_isMem(ht->tbl[hash])  ) break;
+    if ( !blocks_is_mem(ht->tbl[hash])  ) break;
     it = blocks_translate(ht->tbl[hash]);
   }
 
@@ -127,11 +127,11 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
       
   ht->size += 1;
   // Random LRU an item if full
-  if ( ht->size > ht->maxSize ) {
+  if ( ht->size > ht->max_size ) {
     ht->size -= 1;
 
-    uint32_t i = rand() % ht->indexSize;
-    while ( ht->tbl[i] == 0 ) i = rand() % ht->indexSize;
+    uint32_t i = rand() % ht->index_size;
+    while ( ht->tbl[i] == 0 ) i = rand() % ht->index_size;
     ht->tbl[i] = 0;
 
 //i-1 39018 != hash 16463 + shift 6
@@ -212,11 +212,11 @@ void ht_stat(hashtable_t *ht) {
   int mem  = 0;
   int lru  = 0;
   int disk = 0;
-  for(int i = 0; i < ht->indexSize; i++) {
+  for(int i = 0; i < ht->index_size; i++) {
     uint64_t a = ht->tbl[i];
     if ( a == 0 ) zero += 1;
-    else if ( blocks_isMem(a) ) mem += 1;
-    else if ( blocks_isDisk(a) ) disk += 1;
+    else if ( blocks_is_mem(a) ) mem += 1;
+    else if ( blocks_is_disk(a) ) disk += 1;
     else lru += 1;
   }
 
@@ -249,16 +249,16 @@ void ht_verify(hashtable_t *ht, uint32_t idx, uint32_t stop) {
 
 void ht_clear_lru(hashtable_t *ht, uint32_t idx, uint32_t stop) {
   while ( idx < stop ) {
-    //printf(" idx %d %d %d\n",idx,stop, ht->indexSize);
+    //printf(" idx %d %d %d\n",idx,stop, ht->index_size);
 
 
     uint64_t b = ht->tbl[idx];
-    if ( b != 0 && blocks_isLru(b) ) {
+    if ( b != 0 && blocks_is_lru(b) ) {
       ht->tbl[idx] = 0;
 
       int shift = 1;
       while(b) {
-        while( b != 0 && blocks_isLru(b) ) {
+        while( b != 0 && blocks_is_lru(b) ) {
           ht->tbl[idx] = 0;
           idx = (idx + 1) & ht->mask;
           b = ht->tbl[idx];
@@ -288,10 +288,10 @@ void ht_clear_lru(hashtable_t *ht, uint32_t idx, uint32_t stop) {
 } 
 void ht_clear_lru_full(hashtable_t *ht, uint32_t idx, uint32_t stop) {
   idx = 0;
-  stop = ht->indexSize-1;
+  stop = ht->index_size-1;
 
   while ( idx < stop ) {
-    //printf(" idx %d %d %d\n",idx,stop, ht->indexSize);
+    //printf(" idx %d %d %d\n",idx,stop, ht->index_size);
     uint64_t b = ht->tbl[idx];
     item *it = blocks_translate(b);
     if ( it ) {
@@ -307,7 +307,7 @@ void ht_clear_lru_full(hashtable_t *ht, uint32_t idx, uint32_t stop) {
       
       int shift = 1;
       while(b) {
-        while( blocks_isLru(b) ) {
+        while( blocks_is_lru(b) ) {
           ht->tbl[idx] = 0;
           idx = (idx + 1) & ht->mask;
           b = ht->tbl[idx];
@@ -322,13 +322,13 @@ void ht_clear_lru_full(hashtable_t *ht, uint32_t idx, uint32_t stop) {
         if ( bshift < shift ) shift = bshift;
         SET_SHIFT(b, (bshift-shift));
 
-        if ( blocks_isMem(ht->tbl[(idx-shift) & ht->mask]) ) {
+        if ( blocks_is_mem(ht->tbl[(idx-shift) & ht->mask]) ) {
           printf("NOOO shift %d\n", shift);
           int a = idx-shift-2;
           for (int z = 0; z < 10; z++ ) {
             if ( ht->tbl[a] == 0 ) printf("0 ");
-            else if ( blocks_isMem(ht->tbl[a]) ) printf("M ");
-            else if ( blocks_isLru(ht->tbl[a]) ) printf("L ");
+            else if ( blocks_is_mem(ht->tbl[a]) ) printf("M ");
+            else if ( blocks_is_lru(ht->tbl[a]) ) printf("L ");
             else printf("Z "); 
             a+=1;
           }

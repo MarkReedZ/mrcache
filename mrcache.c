@@ -116,11 +116,11 @@ int clear_lru_timer( void *user_data ) {
 
   //double start_time = clock();
   int stop = idx+10000;
-  if ( stop > mrq_ht->indexSize ) stop = mrq_ht->indexSize-2;
+  if ( stop > mrq_ht->index_size ) stop = mrq_ht->index_size-2;
   //ht_clear_lru( mrq_ht, idx, stop );
   ht_verify( mrq_ht, idx, stop );
   idx += 10000;
-  if ( idx > mrq_ht->indexSize ) idx = 0;
+  if ( idx > mrq_ht->index_size ) idx = 0;
   //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
   //printf( " took %f \n ", taken);
   
@@ -300,7 +300,8 @@ void conn_process_queue( my_conn_t *conn ) {
 
         if ( it->keysize == qi->keylen && (memcmp(qi->key, itkey, qi->keylen) == 0)) {
 
-        	conn_append_out( conn, resp_get, 2 );
+        	conn_append_out( conn, resp_get, 2 ); // TODO use the new write_command to bail out if buffer full
+
           if ( COMPRESSION_ENABLED ) {
             unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
       
@@ -373,7 +374,7 @@ void can_write( void *conn, int fd ) {
 static void conn_queue_item( my_conn_t* conn, item *it ) {
   getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
   qi->item = it; 
-  qi->block = mrq_ht->lastBlock;
+  qi->block = mrq_ht->last_block;
   if ( conn->getq_head == NULL ) {
     conn->getq_head = conn->getq_tail = qi;
     return;
@@ -385,7 +386,7 @@ static void conn_queue_item( my_conn_t* conn, item *it ) {
 static void conn_queue_buffer( my_conn_t* conn, char *buf, int sz ) {
   getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
   // TODO last block may not be accurate ( processing queue ) so pass in the block id
-  qi->block = mrq_ht->lastBlock; // If we manage to LRU the block don't try to access the data later
+  qi->block = mrq_ht->last_block; // If we manage to LRU the block don't try to access the data later
   qi->buf = buf;
   qi->sz = sz; 
   if ( conn->getq_head == NULL ) {
@@ -398,7 +399,7 @@ static void conn_queue_buffer( my_conn_t* conn, char *buf, int sz ) {
 static void conn_queue_buffer2( my_conn_t* conn, char *buf, int sz, int nwritten ) {
   getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
   // TODO last block may not be accurate ( processing queue ) so pass in the block id
-  qi->block = mrq_ht->lastBlock; // If we manage to LRU the block don't try to access the data later TODO
+  qi->block = mrq_ht->last_block; // If we manage to LRU the block don't try to access the data later TODO
   qi->buf = buf;
   qi->cur = nwritten;
   qi->sz = sz-nwritten; 
@@ -776,7 +777,7 @@ int main (int argc, char **argv) {
   setup();
 
   if ( settings.disk_size ) {
-    printf("Mrcache starting up on port %d with %dmb memory and %dgb of disk space allocated\n", settings.port, settings.max_memory, settings.disk_size );
+    printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", settings.port, settings.max_memory, settings.disk_size, ((double)settings.index_size/14), settings.index_size );
   } else {
     printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, ((double)settings.index_size/14) );
   }

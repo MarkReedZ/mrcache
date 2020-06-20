@@ -10,10 +10,10 @@ typedef struct hashtable {
   uint64_t *tbl, *newtbl;
   uint32_t mask;
   uint32_t size;
-  uint32_t indexSize;
-  uint32_t maxSize;
-  //uint64_t lastHash;
-  uint64_t lastBlock;
+  uint32_t index_size;
+  uint32_t max_size;
+  //uint64_t last_hash;
+  uint64_t last_block;
 
 } hashtable_t;
 

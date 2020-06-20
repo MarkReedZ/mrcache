@@ -26,12 +26,12 @@ void *blocks_translate( uint64_t blockAddr );
 
 
 void blocks_lru();
-bool blocks_isNearLru( uint64_t blockAddr ); 
+bool blocks_is_near_lru( uint64_t blockAddr ); 
 void blocks_decrement( uint64_t blockAddr ); 
-bool blocks_isInvalid( uint64_t blockAddr );
-bool blocks_isDisk( uint64_t blockAddr );
-bool blocks_isMem( uint64_t blockAddr );
-bool blocks_isLru( uint64_t blockAddr );
+bool blocks_is_invalid( uint64_t blockAddr );
+bool blocks_is_disk( uint64_t blockAddr );
+bool blocks_is_mem( uint64_t blockAddr );
+bool blocks_is_lru( uint64_t blockAddr );
 
 //DELME
 uint32_t blocks_num( uint64_t blockAddr ); 
