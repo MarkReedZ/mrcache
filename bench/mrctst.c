@@ -8,7 +8,7 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 2*1024*1024
 #define NUM 10000
-#define PIPE 64
+#define PIPE 128
 static int bytes = 0;
 static int bw = 0;
 static struct iovec iovs[PIPE];
@@ -277,7 +277,7 @@ int main() {
   //printf("DELME %d\n",strlen(foo));
   char foo[1024*1024];
   //int l = 100*1024;
-  int l = 10;
+  int l = 16;
   for ( int x = 0; x < l; x++ ) {
     foo[x] = 97;
   }

@@ -1,15 +1,8 @@
 
-// TODO need a way to destroy and free a connection
-    //conn_destroy(conn);
-    //free(conn);
-
-
 #include <zstd.h>
 #include <signal.h>
 #include <getopt.h>
 #include <stdarg.h>
-#include "common.h"
-#include "mrcache.h"
 #include <netinet/in.h>
 #include <assert.h>
 #include <unistd.h>
@@ -17,6 +10,8 @@
 
 #include "mrloop.h"
 
+#include "common.h"
+#include "mrcache.h"
 #include "hashtable.h"
 #include "blocks.h"
 #include "city.h"
@@ -36,6 +31,9 @@ unsigned long tot = 0;
 
 static mr_loop_t *loop = NULL;
 struct settings settings;
+
+uint64_t mrq_diskBlocks[3];
+int      mrq_diskReads;
 
 hashtable_t *mrq_ht, *mrq_htnew;
 
@@ -75,9 +73,14 @@ uint64_t num_bits64 (uint64_t x) { return 64 - __builtin_clzll(x); }
 
 static void setup() {
   mrq_ht = malloc( sizeof(hashtable_t) );
-  ht_init(mrq_ht);
+  ht_init(mrq_ht, settings.index_size * 1024 * 1024);
   blocks_init();
 
+  //srand(1); // TODO
+  srand((int)time(NULL));
+
+
+/*
   char *k = "0123456";
   printf("0: %lx\n", CityHash64(k, 1));      
   printf("1: %lx\n", CityHash64(k+1, 1));      
@@ -92,6 +95,7 @@ static void setup() {
   k = "test277238";
   hv = CityHash64(k, 10);
   printf("test277238: %lx\n", CityHash64(k, 10));      
+*/
   //exit(1);
   
 }
@@ -103,6 +107,26 @@ static void print_buffer( char* b, int len ) {
   }
   printf("\n");
 }
+
+// Return 0 to stop the timer
+int clear_lru_timer( void *user_data ) {
+  static int idx = 0;
+
+  if ( mrq_ht  == NULL ) return 1;
+
+  //double start_time = clock();
+  int stop = idx+10000;
+  if ( stop > mrq_ht->indexSize ) stop = mrq_ht->indexSize-2;
+  //ht_clear_lru( mrq_ht, idx, stop );
+  ht_verify( mrq_ht, idx, stop );
+  idx += 10000;
+  if ( idx > mrq_ht->indexSize ) idx = 0;
+  //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
+  //printf( " took %f \n ", taken);
+  
+  return 1;
+}
+
 
 void *setup_conn(int fd, char **buf, int *buflen ) {
   //printf("New Connection\n");
@@ -140,51 +164,6 @@ static void conn_append( my_conn_t* c, char *data, int len ) {
   DBG printf(" append cur now %d %p \n", c->cur_sz, c->buf);
 
 }
-
-/*
-static int bytes_written = 0;
-static int items_written = 0;
-static void test_data( my_conn_t *c, char *in, int sz ) {
-  static char buf[512*1024*1024];
-  static char *bp = buf;
-  static char *p = buf;
-  static int blen = 0;
-  bytes_written += sz;
-
-  memcpy( bp, in, sz );
-  blen += sz;
-  bp += sz;
-
-
-  if ( blen < 6 ) return;
-
-  while ( (p-buf) < (blen-6) ) {
-
-    if ( p[0] != 0 ) { printf(" p0 is not 0\n"); goto prt; }
-    if ( p[1] != 1 ) { printf(" p1 is not 1\n"); goto prt; }
-  
-    unsigned int  l  = *((unsigned int*)(p+2));
-    if ( l != 5000 ) { printf(" sz is not 5000 its %d\n", l ); goto prt; }
-    if ( (p-buf) + l > blen ) break;
-    //if ( blen < 6 + l ) break;
-  
-    p += l+6;
-    //blen -= l + 6;
-    items_written += 1;
-  }
-
-  //if ( blen ) memcpy( buf, p, blen ); 
- 
-  return;
-prt:
-  print_buffer( p, 16 );
-  printf("\n blen %d num items %d\n",blen,items_written);
-  FILE *fp = fopen( "err.out", "wb" );
-  fwrite(buf, 1, blen, fp);
-  fclose(fp);
-  exit(1); 
-}
-*/
 
 static int conn_flush( my_conn_t *c ) {
   ssize_t nwritten = 0;
@@ -247,18 +226,19 @@ static int conn_write_buffer( my_conn_t* conn, char *buf, int bsz ) {
   return 0;
 }
 
-
-
-static void conn_process_queue_comp( my_conn_t *conn ) {
-
+void conn_process_queue( my_conn_t *conn ) {
   while ( conn->getq_head ) {
     getq_item_t *qi = conn->getq_head;
-    if ( qi->item ) {
-      item *it = qi->item;
-      unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
 
-      // Write cmd bytes or if that fails bail
-      if ( conn_write_command( conn ) ) {
+    if ( qi->item ) {
+
+      item *it = qi->item;
+
+      if ( !conn_write_command( conn ) ) return; //if ( conn->out_cur_sz < 2 && !conn_flush(conn) ) return;
+
+      if ( COMPRESSION_ENABLED ) {
+        unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
+  
         char *dbuf = malloc( decomp_sz+4 );
         int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
         uint32_t *p32 = (uint32_t*)(dbuf);
@@ -273,54 +253,20 @@ static void conn_process_queue_comp( my_conn_t *conn ) {
           return;
         } 
         else free(dbuf);
+  
       } else {
-        return;
+
+        char *p = ((char*)it)+2;
+        int n = conn_write_buffer( conn, p, it->size+4 );
+        if ( n ) { 
+          qi->item = NULL;
+          qi->buf = p;
+          qi->cur = n;
+          qi->sz  = it->size+4-n;
+          return;
+        } 
+
       }
-
-    } else if ( qi->buf ) {
-
-      int n = conn_write_buffer( conn, qi->buf+qi->cur, qi->sz );
-      if ( n ) {
-        qi->cur += n;
-        qi->sz -= n;
-        return;
-      }
-      
-      free(qi->buf);
-    }
-
-    conn->getq_head = qi->next;
-    if ( conn->getq_head == NULL ) conn->getq_tail = NULL;
-    free(qi);
-
-  }
-
-  // Flush the buffer when done
-  conn_flush(conn);
-     
-}
-
-static void conn_process_queue( my_conn_t *conn ) {
-  while ( conn->getq_head ) {
-    getq_item_t *qi = conn->getq_head;
-
-    if ( qi->item ) {
-
-      // Make sure we have room for the cmd bytes
-      if ( conn->out_cur_sz < 2 && !conn_flush(conn) ) return;
-
-      item *it = qi->item;
-      conn_append_out( conn, resp_get, 2 );
-      char *p = ((char*)it)+2;
-      int n = conn_write_buffer( conn, p, it->size+4 );
-      // If we stalled n is non zero and the number of bytes written
-      if ( n ) {
-        qi->item = NULL;
-        qi->buf = p;
-        qi->cur = n;
-        qi->sz  = it->size+4-n;
-        return;
-      } 
 
     } else if ( qi->buf ) {
       
@@ -330,12 +276,83 @@ static void conn_process_queue( my_conn_t *conn ) {
         qi->sz -= n;
         return;
       }
+      if ( qi->type == 3 ) {
+        for ( int i=0; i < qi->readsDone; i++ ) { 
+          free(qi->diskItems[i].iov.iov_base); 
+        }
+      }
+
+    } else {
+
+      // Disk reads still outstanding - TODO do we need to wait for them all to return?
+      if ( qi->numReads > qi->readsDone ) return;
+ 
+      if ( qi->numReads > 1 ) {
+        printf("DELME more than 1 read!\n" );
+        exit(1);
+      }
+
+      bool found = false; 
+      for ( int i=0; i < qi->readsDone; i++ ) { 
+        item *it = qi->diskItems[i].iov.iov_base;
+        char *itkey = it->data+it->size;
+        //printf(" item from disk key: %.*s\n", it->keysize, itkey);
+
+        if ( it->keysize == qi->keylen && (memcmp(qi->key, itkey, qi->keylen) == 0)) {
+
+        	conn_append_out( conn, resp_get, 2 );
+          if ( COMPRESSION_ENABLED ) {
+            unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
+      
+            char *dbuf = malloc( decomp_sz+4 );
+            int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
+            uint32_t *p32 = (uint32_t*)(dbuf);
+            *p32 = decomp_size;
+            int n = conn_write_buffer( conn, dbuf, decomp_size+4 );
+    
+            if ( n ) { // TODO need a flag so we free the temp buffer!
+              qi->buf = dbuf;
+              qi->cur = n;
+              qi->sz  = decomp_size+4-n;
+              return;
+            } 
+            else free(dbuf);
+
+          } else {
+          	char *p = ((char*)it)+2;
+          	int n = conn_write_buffer( conn, p, it->size+4 );
+          	if ( n ) { 
+            	qi->buf = p;
+            	qi->cur = n;
+            	qi->sz  = it->size+4-n;
+            	return;
+          	} 
+          }
+          found = true;
+        }
+        free(qi->diskItems[i].iov.iov_base); 
+        qi->diskItems[i].iov.iov_base = NULL;
+
+ 
+      }
+      free(qi->key);
+
+      if ( !found ) { 
+        int n =  conn_write_buffer( conn, resp_get_not_found,   resp_get_not_found_len );
+        if ( n ) { 
+          //conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
+          printf("DELME TODO disk reads missed and can't write the full miss response\n");
+          exit(1);
+        } 
+      }
 
     }
 
+
     conn->getq_head = qi->next;
     if ( conn->getq_head == NULL ) conn->getq_tail = NULL;// TODO do we need this
-    // TODO free? We need a flag to free or not a buffer
+    // TODO free? We need a flag to free or not a buffer?
+    free(qi);
 
   }
   // Flush the buffer when done
@@ -349,8 +366,7 @@ void can_write( void *conn, int fd ) {
   c->stalled = false;
 
   // Add any queue'd items to the buffer
-  if ( COMPRESSION_ENABLED ) conn_process_queue_comp( c );
-  else                       conn_process_queue( c );
+  conn_process_queue( c );
 
 }
 
@@ -382,7 +398,7 @@ static void conn_queue_buffer( my_conn_t* conn, char *buf, int sz ) {
 static void conn_queue_buffer2( my_conn_t* conn, char *buf, int sz, int nwritten ) {
   getq_item_t *qi = calloc( 1, sizeof(getq_item_t) );
   // TODO last block may not be accurate ( processing queue ) so pass in the block id
-  qi->block = mrq_ht->lastBlock; // If we manage to LRU the block don't try to access the data later
+  qi->block = mrq_ht->lastBlock; // If we manage to LRU the block don't try to access the data later TODO
   qi->buf = buf;
   qi->cur = nwritten;
   qi->sz = sz-nwritten; 
@@ -411,8 +427,7 @@ static void conn_write_item( my_conn_t* conn, item *it ) {
 void finishOnData( my_conn_t *conn ) {
   if ( !conn->stalled ) {
     if (conn->getq_head) {
-      if ( COMPRESSION_ENABLED ) conn_process_queue_comp( conn );
-      else                       conn_process_queue( conn );
+      conn_process_queue( conn );
     }
     if ( conn->out_cur_sz > 0 ) {
       conn_flush(conn);
@@ -484,9 +499,13 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       DBG_READ printf("get key %d >%.*s<\n", keylen, keylen, key );
       unsigned long hv = CityHash64(key, keylen);      
-      item *it = ht_find(mrq_ht, key, keylen, hv);
+      item *it = NULL;
+      mrq_diskReads = 0;
+      int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
 
-      if ( it ) { // Found
+      settings.tot_reads += 1;
+
+      if ( rc == 1 && it ) { // Found
 
         if ( COMPRESSION_ENABLED ) {
 
@@ -521,10 +540,38 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
           DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
 
         }
+      } else if ( rc==2 ) {
+
+        // Disk
+        getq_item_t *qi = calloc(1, sizeof(getq_item_t));
+        qi->type = 3;
+        qi->numReads = mrq_diskReads;
+        qi->keylen = keylen;
+        qi->key = malloc( keylen );
+        memcpy( qi->key, key, keylen );
+
+        // Kick off the disk IO
+        for (int i=0; i < mrq_diskReads; i++ ) {
+          qi->diskItems[i].qi = qi;
+          qi->diskItems[i].conn = conn;
+          blocks_fs_read( mrq_diskBlocks[i], &(qi->diskItems[i]) );
+        }
+
+        // Queue it up in the output
+        if ( conn->getq_head == NULL ) {
+          conn->getq_head = conn->getq_tail = qi;
+        } else {
+          conn->getq_tail->next = qi;
+          conn->getq_tail = qi;
+        }
+
       } else {
 
-        int n =  conn_write_buffer( conn, resp_get_not_found,   resp_get_not_found_len );
-        if ( n ) conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
+        if ( conn->getq_head ) conn_queue_buffer( conn, resp_get_not_found, resp_get_not_found_len );
+        else {
+          int n =  conn_write_buffer( conn, resp_get_not_found,   resp_get_not_found_len );
+          if ( n ) conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
+        }
 
         DBG_READ printf("getkey - not found\n");
       }
@@ -579,7 +626,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
           p += 8 + keylen + vlen;
 
           // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
-          if ( settings.disk_size ) blockAddr |= num_bits64(vlen+8+keylen) << 20; // TODO 8 is the item size?... just do sizeof?
+          if ( settings.disk_size ) SET_DISK_SIZE( blockAddr, num_bits64(compressed_size+8+keylen));
           unsigned long hv = CityHash64(key, keylen);      
           ht_insert( mrq_ht, blockAddr, key, keylen, hv );
 
@@ -600,13 +647,29 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         p += 8 + keylen + vlen;
 
         // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
-        if ( settings.disk_size ) blockAddr |= num_bits64(vlen+8+keylen) << 20; // TODO 8 is the item size?... just do sizeof?
+        if ( settings.disk_size ) SET_DISK_SIZE( blockAddr, num_bits64(vlen+8+keylen));
         unsigned long hv = CityHash64(key, keylen);      
         ht_insert( mrq_ht, blockAddr, key, keylen, hv );
       }
 
   
       num_writes += 1;
+
+    } else if ( cmd == STAT ) {
+      printf("STAT\n");
+      printf("Total reads %ld\n", settings.tot_reads);
+      printf("Avg shift %.2f\n", (double)settings.read_shifts/settings.tot_reads);
+      printf("Max shift %d\n", settings.max_shift);
+      data_left -= 2;
+      p += 2;
+      settings.tot_reads = 0;
+      settings.read_shifts = 0;
+      ht_stat(mrq_ht);
+      //ht_clear_lru_full( mrq_ht, 0, 0 );
+      //printf("After full clear\n");
+      //ht_stat(mrq_ht);
+      //exit(1);
+
 
     } else { // Close connection? TODO
       data_left = 0;
@@ -627,11 +690,15 @@ static void usage(void) {
   printf( "Mrcache Version 0.1\n"
           "    -h, --help                    This help\n"
           "    -p, --port=<num>              TCP port to listen on (default: 7000)\n"
-          "    -m, --max-memory=<megabytes>  Maximum amount of memory in mb (default: 256)\n"
+          "    -m, --max-memory=<mb>         Maximum amount of memory in mb (default: 256)\n"
+          "    -d, --max-disk=<gb>           Maximum amount of disk in gb (default: 1)\n"
+          "    -i, --index-size=<mb>         Index size in mb (must be a power of 2 and sz/14 is the max number of items)\n"
           "    -z, --zstd                    Enable zstd compression in memory\n"
           "\n"
         );
 }
+
+// ./mrcache -m 1500 -d 40 -i 256
 
 int main (int argc, char **argv) {
 
@@ -640,16 +707,18 @@ int main (int argc, char **argv) {
   char *shortopts =
     "h"
     "m:"
+    "d:"
+    "i:"
     "p:"
     "z"
-    "d:"
     ;
   const struct option longopts[] = {
     {"help",             no_argument, 0, 'h'},
     {"max-memory", required_argument, 0, 'm'},
+    {"max-disk",   required_argument, 0, 'd'},
+    {"index-size", required_argument, 0, 'i'},
     {"port",       required_argument, 0, 'p'},
     {"zstd",             no_argument, 0, 'z'},
-    {"disk",       required_argument, 0, 'd'},
     {0, 0, 0, 0}
   };
 
@@ -657,6 +726,13 @@ int main (int argc, char **argv) {
   settings.max_memory = 512;
   settings.flags = 0;
   settings.disk_size = 0;
+  settings.index_size = 0;
+  settings.block_size = 2;
+
+  settings.read_shifts  = 0;
+  settings.tot_reads    = 0;
+  settings.tot_writes   = 0;
+  settings.write_shifts = 0;
 
   int optindex, c;
   while (-1 != (c = getopt_long(argc, argv, shortopts, longopts, &optindex))) {
@@ -673,6 +749,9 @@ int main (int argc, char **argv) {
     case 'd':
       settings.disk_size = atoi(optarg);
       break;
+    case 'i':
+      settings.index_size = atoi(optarg);
+      break;
     case 'h':
       usage();
       return(2);
@@ -683,42 +762,34 @@ int main (int argc, char **argv) {
     }
   }
 
+  if ( settings.index_size == 0 ) {
+    printf("The index size is a required option\n");
+    usage();
+    return(2);
+  }
+  if ( !IS_POWER_OF_TWO(settings.index_size) ) {
+    printf("The index size must be a power of two\n");
+    usage();
+    return(2);
+  }
+
   setup();
 
   if ( settings.disk_size ) {
-    printf("Mrcache starting up on port %d with %dmb memory and %dmb of disk space allocated\n", settings.port, settings.max_memory, settings.disk_size );
+    printf("Mrcache starting up on port %d with %dmb memory and %dgb of disk space allocated\n", settings.port, settings.max_memory, settings.disk_size );
   } else {
-    printf("Mrcache starting up on port %d with %dmb allocated\n", settings.port, settings.max_memory );
+    printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, ((double)settings.index_size/14) );
   }
-
-  settings.max_memory *= 1024*1024;
 
   loop = mr_create_loop(sig_handler);
   settings.loop = loop;
   mr_tcp_server( loop, settings.port, setup_conn, on_data );
-  //mr_add_timer(loop, 10, on_timer);
+  mr_add_timer(loop, 0.1, clear_lru_timer, NULL);
   mr_run(loop);
   mr_free(loop);
 
   return 0;
 }
 
-// TODO writev was slower than copying to an output buffer and queue'ng items up
-// If we can writev AND guarantee all writes flush and don't return EAGAIN 
 
-            //conn->iovs[conn->iov_index].iov_base = conn->out_buf;
-            //conn->iovs[conn->iov_index].iov_len = conn->out_cur_sz;
-            //conn->iov_index += 1; 
-            //mr_writev( loop, conn->fd, conn->iovs, conn->iov_index );
-            //conn->iov_index = 0; 
-            //conn->out_cur_sz = 0;
-          //conn->iovs[conn->iov_index].iov_base = resp_get;
-          //conn->iovs[conn->iov_index].iov_len = 2;
-          //conn->iov_index += 1; 
-          //conn->iovs[conn->iov_index].iov_base = ((char*)it)+2;
-          //conn->iovs[conn->iov_index].iov_len = it->size+4;
-          //conn->iov_index += 1; 
-          //if ( conn->iov_index > 128 ) {
-            //mr_writevf( loop, conn->fd, conn->iovs, conn->iov_index );
-            //conn->iov_index = 0; 
-          //}
+

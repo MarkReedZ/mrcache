@@ -13,6 +13,8 @@
 
 static int num_blocks;
 static int min_block;
+static uint32_t blocks_bitlen;
+static uint32_t blocks_bytelen;
 static void *base;
 static void *cur;
 static uint64_t cur_block;
@@ -27,8 +29,10 @@ static int fsblock_min_block;
 static int num_fs_blocks;
 
 void blocks_init() {
-  num_blocks = settings.max_memory;
-  base = malloc( num_blocks * 1024 * 1024 );
+  blocks_bitlen = 20 + (settings.block_size>>1);
+  blocks_bytelen = 0x1ull << blocks_bitlen;
+  num_blocks = settings.max_memory / settings.block_size;
+  base = malloc( settings.max_memory * 1024 * 1024 );
   min_block = 1;
   cur = base;
   cur_block = 1;
@@ -41,7 +45,7 @@ void blocks_init() {
   }
 
   if ( settings.disk_size ) {
-    num_fs_blocks = settings.disk_size / FSBLOCK_SIZE; 
+    num_fs_blocks = (settings.disk_size*1024) / FSBLOCK_SIZE; 
     fsblock_fds = calloc( num_fs_blocks, sizeof(int) );  
 
     mkdir( "fsblocks", 0700 );
@@ -61,14 +65,17 @@ void blocks_init() {
 uint64_t blocks_alloc( int sz ) {
 
   // If we're going into the next block
-  if ( (cur_block_size+sz) > 0xFFFFF ) {
+  if ( (cur_block_size+sz) > ((blocks_bytelen)-1) ) { // TODO make this a constant.  No variable block size
+    //printf("blocks alloc sz %d\n",sz);
+    //printf("blocks alloc cur %x\n",cur_block_size+sz);
+    //printf("blocks block sz %llx\n",((0x1ull<<blocks_bitlen)-1));
 
     if ( full ) blocks_lru();
     else if ( cur_block == num_blocks-1 ) full = true;
 
     cur_block += 1;
-    items_in_block[ cur_block%num_blocks ] = 0; // TODO delme?
-    cur = base + ((cur_block%num_blocks)<<20);
+    items_in_block[ cur_block%num_blocks ] = 0;
+    cur = base + ((cur_block%num_blocks)<<blocks_bitlen);
     cur_block_size = 0;
 
   }
@@ -84,9 +91,12 @@ void blocks_lru() {
   int i = min_block%num_blocks;
   int n = items_in_block[ i ];
 
-  if ( settings.disk_size ) {
+  if ( settings.disk_size ) { 
     blocks_fs_write(i);
+  } else {
+    fsblock_min_block = min_block+1;
   }
+  
 
   // Which ht to decrement?
   ht_decrement(mrq_ht, n); 
@@ -96,29 +106,28 @@ void blocks_lru() {
   
 }
 
-// 39 bits of block id, 5 bits of storage, 20 bits of value length 
 void *blocks_translate( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> BLOCK_SHIFT; // >> 25
+  uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < min_block ) return NULL;
-  uint32_t off = blockAddr & 0xFFFFF;
-  return (base + ((blk%num_blocks)<<20)) + off;
+  uint32_t off = blockAddr & 0x1FFFFF; // TODO bitlen?
+  return (base + ((blk%num_blocks)<<blocks_bitlen)) + off;
 }
 
 bool blocks_isvalid( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> BLOCK_SHIFT;
+  uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < min_block ) return false;
   return true;
 }
 
 bool blocks_isNearLru( uint64_t blockAddr ) {
   if ( !full ) return false;
-  uint64_t blk = blockAddr >> BLOCK_SHIFT;
+  uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < (min_block + 4) ) return true;
   return false;
 }
 
 void blocks_decrement( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> BLOCK_SHIFT;
+  uint64_t blk = GET_BLOCK(blockAddr);
   items_in_block[ blk%num_blocks ] -= 1;
 }
 uint32_t blocks_num( uint64_t blk ) {
@@ -126,20 +135,43 @@ uint32_t blocks_num( uint64_t blk ) {
 }
 
 bool blocks_isInvalid( uint64_t blockAddr ) {
-  uint64_t blk = blockAddr >> BLOCK_SHIFT;
+  uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < min_block ) return true;
   return false;
 }
 
+// Only call this if you know its not mem
+bool blocks_isDisk( uint64_t blockAddr ) {
+  uint64_t blk = GET_BLOCK(blockAddr);
+  //if ( blk >= fsblock_min_block ) return true;
+  if ( blk < min_block && blk >= fsblock_min_block ) return true;
+  return false;
+}
+
+bool blocks_isMem( uint64_t blockAddr ) {
+  uint64_t blk = GET_BLOCK(blockAddr);
+  if ( blk >= min_block ) return true;
+  return false;
+}
+bool blocks_isLru( uint64_t blockAddr ) {
+  uint64_t blk = GET_BLOCK(blockAddr);
+  //if ( blk < min_block && blk >  ) return true;
+  if ( blk < fsblock_min_block ) return true; // When not using disk fsblock min needs to be equal to min_block
+  return false;
+}
+
 void blocks_on_write_done( void *iov ) {
+  free(((struct iovec*)iov)->iov_base);
   free(iov);
 }
 void blocks_fs_write( int blk ) {
-  char *p =   base + ((blk%num_blocks)<<20);
 
-  struct iovec *iov = malloc(8);//sizeof(struct iovec));
+  char *p = malloc(blocks_bytelen);
+  memcpy(p, base + ((blk%num_blocks)<<blocks_bitlen), blocks_bytelen);
+
+  struct iovec *iov = malloc(sizeof(struct iovec));
   iov->iov_base = p;
-  iov->iov_len = 1024*1024;
+  iov->iov_len = settings.block_size*1024*1024;
 
   if ( fsblock_min_block == -1 ) { 
     fsblock_min_block = blk; 
@@ -154,8 +186,38 @@ void blocks_fs_write( int blk ) {
     fsblock_index = (fsblock_index+1)%num_fs_blocks;
     fsblock_size = 0;
     fsblock_min_block += 64;
-    ftruncate( fsblock_fds[fsblock_index], 0 );// TODO test return code?
+    int rc = ftruncate( fsblock_fds[fsblock_index], 0 );// TODO test return code?
   }
+
+}
+
+void blocks_on_read_done( void *ptr ) {
+
+  disk_item_t *di = (disk_item_t*)ptr;
+  getq_item_t *qi = di->qi;
+  qi->readsDone += 1;
+  conn_process_queue( di->conn );
+
+  //free(((struct iovec*)iov)->iov_base);
+  //free(iov);
+}
+
+void blocks_fs_read( uint64_t blockAddr, disk_item_t *di ) {
+  uint64_t blk = GET_BLOCK(blockAddr);
+  
+  int fsblk = (blk/64)%num_fs_blocks;
+  int fd = fsblock_fds[fsblk];
+
+  int sz = 0x1ull << GET_DISK_SIZE(blockAddr);
+  di->iov.iov_base = malloc( sz );
+  di->iov.iov_len = sz;
+
+  off_t off = ((blk-1)*blocks_bytelen) + (blockAddr & 0x1FFFFF);
+
+  // Passing di works as the iov is the first part of the struct
+  mr_readvcb( settings.loop, fd, (struct iovec*)di, 1, off, di, blocks_on_read_done  );
+  mr_flush(settings.loop);
+
 
 }
 
