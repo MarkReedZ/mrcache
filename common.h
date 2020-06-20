@@ -8,17 +8,43 @@
 #include <string.h>
 #include <time.h>
 
+#include "mrloop.h"
+#include "hashtable.h"
 
 #define DBG if(0) 
 #define DBG_READ if(0)
 #define DBG_SET if(0)
 
-#define likely(x)    __builtin_expect (!!(x), 1)
-#define unlikely(x)  __builtin_expect (!!(x), 0)
-
-// TODO why? LOL
-typedef  uint32_t       u4b;
-typedef  uint16_t       u2b;
-typedef  unsigned  char ub;
+typedef struct hashtable hashtable_t;
 
 
+// globals
+extern hashtable_t *mrq_ht;
+extern uint64_t mrq_diskBlocks[3];
+extern int mrq_diskReads;
+
+struct settings {
+  int port;
+  int max_memory; // mb
+  int disk_size;  // gb
+  int index_size;  // mb
+  int block_size;  // mb
+  uint32_t flags;
+  mr_loop_t *loop;
+  uint64_t tot_reads;
+  uint64_t read_shifts;
+  uint64_t tot_writes;
+  uint64_t write_shifts;
+  uint32_t max_shift;
+};
+
+extern struct settings settings;
+
+#define ENABLE_COMPRESSION  settings.flags |= 0x1
+#define COMPRESSION_ENABLED (settings.flags & 0x1)
+
+#define LIKELY(x)   (__builtin_expect(!!(x), 1))
+#define UNLIKELY(x) (__builtin_expect(!!(x), 0))
+
+
+#define IS_POWER_OF_TWO(x)  (x > 0 && ((x & (x - 1)) == 0))

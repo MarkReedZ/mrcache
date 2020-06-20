@@ -1,30 +1,15 @@
 
 #pragma once
-#include "common.h"
-#include "hashtable.h"
-#include "mrloop.h"
 
-extern hashtable_t *mrq_ht;
-extern hashtable_t *mrq_htnew;
+#include "mrloop.h"
+#include "common.h"
 
 enum cmds {
   GET = 1,
   SET,
+  STAT,
   CMDS_END
 };
-
-struct settings {
-  int port; 
-  int max_memory; // mb
-  int disk_size;  // mb
-  uint32_t flags;
-  mr_loop_t *loop;
-};
-
-#define ENABLE_COMPRESSION  settings.flags |= 0x1
-#define COMPRESSION_ENABLED (settings.flags & 0x1)
-
-extern struct settings settings;
 
 typedef struct _conn my_conn_t;
 
@@ -34,18 +19,30 @@ typedef struct __attribute__((__packed__)) _item {
   char data[];
 } item;
 
+typedef struct _disk_item_t {
+  struct iovec iov;
+  void *qi; 
+  my_conn_t *conn;
+} disk_item_t;
+
 typedef struct _getq_item_t {
   item *item;
   char *buf;
   int cur, sz;
   uint64_t block;
   void *next;
+
+  int type; // TODO use this and share pointers
+  // Disk reads
+  disk_item_t diskItems[3];
+  int numReads, readsDone;
+  char *key;
+  int keylen;
+
 } getq_item_t;
 
-//static void flush();
-
-
-//static void flush();
 
 void can_write( void *conn, int fd );
+void conn_process_queue( my_conn_t *conn );
+
 

@@ -6,179 +6,198 @@
 
 //static int num_lru_move = 0;
 
-void ht_init(hashtable_t *ht) {
 
+void ht_init(hashtable_t *ht, uint32_t sz) {
+
+  int index_len = sz >> 3;
+  printf(" index_len %d\n", index_len);
+  ht->mask = index_len - 1;
+  printf(" htmask %x\n", ht->mask);
+  ht->maxSize = index_len * 0.70;
+  printf(" max items %d\n", ht->maxSize);
   ht->size = 0;
-  ht->maxSize = (uint64_t)1 << 20;
-  ht->mask = ht->maxSize - 1;
-  ht->growthSize = ht->maxSize * 0.70;
+  ht->indexSize = index_len;
 
-  ht->tbl = calloc( ht->maxSize, sizeof(uint64_t));
+  ht->tbl = calloc( index_len+1, sizeof(uint64_t));
   if (!ht->tbl) {
     fprintf(stderr, "Failed to init hashtable.\n");
     exit(EXIT_FAILURE);
   }
 }
 
-
-int ht_resize_timer( void *htt ) {
-  hashtable_t *ht = htt;
-  double start_time = clock();
-  int max = ht->new_idx + 50000;
-  if ( max > ht->maxSize ) max = ht->maxSize;
-  for ( int i = ht->new_idx; i < max; i++ ) {
-
-    // TODO if item is on disk still need to copy
-    item *it = blocks_translate(ht->tbl[i]);
-    if (it) {
-      char *itkey = it->data+it->size;
-      unsigned long hv = CityHash64(itkey, it->keysize);
-      ht_insert_new( ht, ht->tbl[i], itkey, it->keysize, hv );
-    }
-  }
-  ht->new_idx = max;
-  double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
-  printf( " resize timer tick took %f max %d sz %d \n ", taken, max, ht->maxSize);
-
-  if ( max >= ht->maxSize ) {
-    // We're done
-    free(ht->tbl); ht->tbl = ht->newtbl; ht->newtbl = NULL;
-    ht->maxSize <<= 1;
-    ht->growthSize = ht->maxSize * 0.70;
-    ht->size = ht->new_size;
-    ht->mask = ht->new_mask;
-    ht->resizing = false;
-    printf(" done resizing %d %d\n", ht->size, ht->growthSize);
-    return 0; // Stop the timer
-  }
-  return 1; 
-}
-
-void ht_resize(hashtable_t *ht) {
-
-  if ( ht->resizing ) return;
-  ht->resizing = true;
-
-  uint64_t *p = calloc( ht->maxSize << 1, sizeof(uint64_t));
-  if ( !p ) {
-    ht->maxSize >>= 1;
-    printf("oom\n");  // TODO
-    exit(-1);
-  }
-  ht->newtbl = p;
-  ht->new_mask = (ht->maxSize<<1) - 1;
-  ht->new_idx  = 0;
-  ht->new_size = 0;
-
-  // Resize, and if we're not done add a timer to continue
-  if (ht_resize_timer( ht )) mr_add_timer( settings.loop, 0.01, ht_resize_timer, (void*)ht );
-
-}
-
-/*
-When using disk:
-
-  We'll keep the last 2 bytes of each key to reduce the number of disk reads
-  Create an array to hold block addresses on disk
-    no array just loop twice
-  Loop until invalid block adding items on disk to the array and checking those in mem.
-  If miss in memory kick off reads for each item on disk that matches the last 2 bytes of key
-    malloc a struct with the key and such then pass it to each disk read
-      this struct has to be queued up to hold the output buffer
-    if all reads come back and missed we return a miss
-      if we timeout return a miss
-
-*/
-
-item *ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv) {
+int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **outptr) {
 
   uint32_t hash = hv & ht->mask;
   DBG_SET printf("ht_find hash 0x%08x \n", hash );
+  bool disk = false;
 
-  item *it = blocks_translate(ht->tbl[hash]);
-  while (it) {
-    DBG_SET printf("ht_find hash 0x%08x \n", hash );
-    char *itkey = it->data+it->size;
-    if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
-      
-      /*
-      // If near lru block update ht->tbl[hash] and return it
-      if ( blocks_isNearLru(ht->tbl[hash])) {
-        blocks_decrement(ht->tbl[hash]);
-        num_lru_move += 1;
-        DBG printf(" near lru move num %d\n",num_lru_move );
-        uint64_t blockAddr = blocks_alloc( sizeof(item) + it->size );
-        ht->tbl[hash] = blockAddr; 
-        item *itnew = blocks_translate( blockAddr );
-        itnew->key = it->key;
-        itnew->size = it->size;
-        memcpy( itnew->data, it->data, it->size );
-        return itnew;
+  uint64_t blockAddress = ht->tbl[hash];
+
+  while( blockAddress ) {
+
+    item *it = blocks_translate(blockAddress);
+    if ( it ) {
+      settings.read_shifts += 1;
+      char *itkey = it->data+it->size;
+      if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
+        ht->lastBlock = GET_BLOCK(blockAddress);
+        *outptr = it;
+        return 1;
       }
-      */
-      //ht->lastHash = hash; // TODO still need this?
-      ht->lastBlock = GET_BLOCK(ht->tbl[hash]);
-      return it;
+    } else {
+      
+      // Disk
+      if ( blocks_isDisk(blockAddress) ) {
+
+        // Only read from disk if the index key bits match
+        if ( (key[keylen-1]&0xF) == GET_KEY(blockAddress) ) {
+
+          disk = true;
+          if ( mrq_diskReads < 3 ) {
+            mrq_diskBlocks[mrq_diskReads++] = blockAddress;
+          }
+
+        }
+
+      } else {
+
+        // We could remove the lru here and shift things left
+
+      }
     }
+
     hash = (hash + 1) & ht->mask;
-    if ( ht->tbl[hash] == 0 ) break;
-    it = blocks_translate(ht->tbl[hash]);
+    blockAddress = ht->tbl[hash];
+    
   }
 
-  return NULL;
+  if ( disk ) return 2;
+  
+  return 0;
+
 }
 
+static int num_inserts = 0;
 // TODO Can pass in the item to avoid an extra translate
 void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
   DBG_SET printf("ht_insert blkadr 0x%lx key >%.*s<\n", blockAddr, keylen, key);
+  bool print = false;
 
-  if ( unlikely(ht->newtbl) ) ht_insert_new( ht, blockAddr, key, keylen, hv );
+  num_inserts += 1;
+  if ((num_inserts%100000) == 0) printf(" max shift %d \n",settings.max_shift);
 
   uint32_t hash = hv & ht->mask;
+  uint32_t ohash = hv & ht->mask;
+  if ( hash == 113977 ) print = true;
+  if ( hash == 11977 ) print = true;
+  if ( hash == 1221977 ) print = true;
+  if ( hash == 12331977 ) print = true;
+  //if ( hash == 18349 ) print = true;
 
+
+  uint64_t shift = 0;
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
     char *itkey = it->data+it->size;
+    if ( print ) { printf("ohash %d hash %d %.*s it key %.*s max shift %d\n",ohash, hash, keylen, key, it->keysize, itkey, settings.max_shift ); }
     if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
       blocks_decrement(ht->tbl[hash]);
   
-      uint64 blk = ht->tbl[hash] >> BLOCK_SHIFT;
+      SET_SHIFT( blockAddr, shift );
+      SET_KEY( blockAddr, key[keylen-1] );
+
       ht->tbl[hash] = blockAddr; // Use the new item location
-      blk = ht->tbl[hash] >> BLOCK_SHIFT;
       return;
     }
     hash = (hash + 1) & ht->mask;
+    shift += 1;
+    if ( shift > settings.max_shift ) settings.max_shift = shift;
 
     // if 0 or an LRU'd block we can install here TODO wouldn't blocks translate just return null breaking us out?
-    if ( !blocks_isvalid(ht->tbl[hash])  ) break;
+    // TODO This will become if disk increment until not?
+    if ( !blocks_isMem(ht->tbl[hash])  ) break;
     it = blocks_translate(ht->tbl[hash]);
   }
+
   DBG_SET printf("ht_insert hash 0x%08x \n", hash );
+  SET_SHIFT( blockAddr, shift );
+  SET_KEY( blockAddr, key[keylen-1] );
   ht->tbl[hash] = blockAddr;
+  if ( print ) { printf("ohash %d hash %d %.*s shift %ld %ld\n",ohash, hash, keylen, key, shift, GET_SHIFT(blockAddr)); }
       
   ht->size += 1;
-  if ( ht->size > ht->growthSize ) ht_resize(ht);
+  // Random LRU an item if full
+  if ( ht->size > ht->maxSize ) {
+    ht->size -= 1;
 
-}
-void ht_insert_new(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
+    uint32_t i = rand() % ht->indexSize;
+    while ( ht->tbl[i] == 0 ) i = rand() % ht->indexSize;
+    ht->tbl[i] = 0;
 
-  uint32_t hash = hv & ht->new_mask;
+//i-1 39018 != hash 16463 + shift 6
 
-  item *it = blocks_translate(ht->newtbl[hash]);
 
-  while (it) {
-    char *itkey = it->data+it->size;
-    if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
-      ht->newtbl[hash] = blockAddr; // Use the new item location
-      return;
+    // Shift items over if they belong 
+    i+=1;
+    uint64_t tmp = ht->tbl[i];
+    shift = GET_SHIFT(tmp);
+
+      item *it = blocks_translate(tmp);
+      if ( it ) {
+        char *itkey = it->data+it->size;
+        unsigned long zhv = CityHash64(itkey, it->keysize);
+        hash = zhv & ht->mask;
+  
+        if ( i != ((hash+shift)&ht->mask) ) {
+          printf("i %d != hash %d + shift %ld\n",i, hash, shift);
+          printf("i %08x != %08lx\n",i, (hash+shift)&ht->mask);
+          exit(1);
+        }
+      }
+
+    while ( shift ) {
+      shift -= 1;
+      SET_SHIFT(tmp, shift);
+      ht->tbl[i-1] = tmp;
+      ht->tbl[i] = 0;
+
+/*
+      item *it = blocks_translate(tmp);
+      char *itkey = it->data+it->size;
+      unsigned long zhv = CityHash64(itkey, it->keysize);
+      hash = zhv & ht->mask;
+
+      if ( i-1 != hash+shift ) {
+        printf("i-1 %d != hash %d + shift %d\n",i-1, hash, shift);
+        printf("max shift %d!\n",settings.max_shift);
+        exit(1);
+      }
+*/
+
+      if ( shift == 0 ) {
+
+        item *it = blocks_translate(tmp);
+        char *itkey = it->data+it->size;
+        unsigned long hv = CityHash64(itkey, it->keysize);
+        hash = hv & ht->mask;
+
+        if ( hash != i-1 ) {
+          printf("i %d != hash %d\n",i, hash);
+          printf("max shift %d!\n",settings.max_shift);
+          exit(1);
+        }
+
+    	}
+
+      i+=1;
+      tmp = ht->tbl[i];
+      shift = GET_SHIFT(tmp);
+      //if ( GET_SHIFT(ht->tbl[i+1]) ) {
+        //printf(" YAY shifted! %ld %08lx\n", GET_SHIFT(ht->tbl[i+1]), ht->tbl[i+1]);
+        //exit(1);
+      //}
     }
-    hash = (hash + 1) & ht->new_mask;
-
-    it = blocks_translate(ht->newtbl[hash]);
-  }
-
-  ht->newtbl[hash] = blockAddr;
-  ht->new_size += 1;
+  } 
 
 }
 
@@ -186,6 +205,151 @@ void ht_insert_new(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keyl
 void ht_decrement(hashtable_t *ht, int n) {
   ht->size -= n;
 }
+
+void ht_stat(hashtable_t *ht) {
+
+  int zero = 0;
+  int mem  = 0;
+  int lru  = 0;
+  int disk = 0;
+  for(int i = 0; i < ht->indexSize; i++) {
+    uint64_t a = ht->tbl[i];
+    if ( a == 0 ) zero += 1;
+    else if ( blocks_isMem(a) ) mem += 1;
+    else if ( blocks_isDisk(a) ) disk += 1;
+    else lru += 1;
+  }
+
+  printf("Hashtable\n");
+  printf("  zero %d\n", zero);
+  printf("  mem  %d\n", mem);
+  printf("  lru  %d\n", lru);
+  printf("  disk %d\n\n", disk);
+  printf("  tot  %d\n\n", mem+lru+disk);
+
+}
+
+void ht_verify(hashtable_t *ht, uint32_t idx, uint32_t stop) {
+
+  for (int i = idx; i < stop; i++ ) {
+    uint64_t b = ht->tbl[idx];
+    item *it = blocks_translate(b);
+    if (it == NULL) continue;
+    char *itkey = it->data+it->size;
+    unsigned long hv = CityHash64(itkey, it->keysize);
+    uint64_t hash = hv & ht->mask;
+
+    if ( hash != idx ) {
+      printf("i %d != hash %ld\n",i, hash);
+      exit(1);
+    }
+    
+  }
+}
+
+void ht_clear_lru(hashtable_t *ht, uint32_t idx, uint32_t stop) {
+  while ( idx < stop ) {
+    //printf(" idx %d %d %d\n",idx,stop, ht->indexSize);
+
+
+    uint64_t b = ht->tbl[idx];
+    if ( b != 0 && blocks_isLru(b) ) {
+      ht->tbl[idx] = 0;
+
+      int shift = 1;
+      while(b) {
+        while( b != 0 && blocks_isLru(b) ) {
+          ht->tbl[idx] = 0;
+          idx = (idx + 1) & ht->mask;
+          b = ht->tbl[idx];
+          shift += 1;
+        }
+        if ( b == 0 ) break;
+        int bshift = GET_SHIFT(b);
+        if ( bshift == 0 ) {
+          idx = (idx + 1) & ht->mask;
+          break;
+        }
+        //if ( bshift ) { printf("bshift! idx %d\n", idx); exit(1); }
+        if ( bshift < shift ) shift = bshift;
+        SET_SHIFT(b, (bshift-shift));
+        ht->tbl[(idx-shift) & ht->mask] = b;
+        ht->tbl[idx] = 0;
+        idx = (idx + 1) & ht->mask;
+        b = ht->tbl[idx];
+      }
+     
+    }
+
+    idx = (idx + 1) & ht->mask;
+    b = ht->tbl[idx];
+
+  }
+} 
+void ht_clear_lru_full(hashtable_t *ht, uint32_t idx, uint32_t stop) {
+  idx = 0;
+  stop = ht->indexSize-1;
+
+  while ( idx < stop ) {
+    //printf(" idx %d %d %d\n",idx,stop, ht->indexSize);
+    uint64_t b = ht->tbl[idx];
+    item *it = blocks_translate(b);
+    if ( it ) {
+      char *itkey = it->data+it->size;
+      unsigned long hv = CityHash64(itkey, it->keysize);
+      uint64_t hash = hv & ht->mask;
+      printf(" %.*s %08lx\n", it->keysize, itkey, hash);
+    }
+    idx += 1;
+  }
+
+/*
+      
+      int shift = 1;
+      while(b) {
+        while( blocks_isLru(b) ) {
+          ht->tbl[idx] = 0;
+          idx = (idx + 1) & ht->mask;
+          b = ht->tbl[idx];
+          shift += 1;
+        }
+        int bshift = GET_SHIFT(b);
+        if ( bshift == 0 ) {
+          idx = (idx + 1) & ht->mask;
+          break;
+        }
+        //if ( bshift ) { printf("bshift! idx %d\n", idx); exit(1); }
+        if ( bshift < shift ) shift = bshift;
+        SET_SHIFT(b, (bshift-shift));
+
+        if ( blocks_isMem(ht->tbl[(idx-shift) & ht->mask]) ) {
+          printf("NOOO shift %d\n", shift);
+          int a = idx-shift-2;
+          for (int z = 0; z < 10; z++ ) {
+            if ( ht->tbl[a] == 0 ) printf("0 ");
+            else if ( blocks_isMem(ht->tbl[a]) ) printf("M ");
+            else if ( blocks_isLru(ht->tbl[a]) ) printf("L ");
+            else printf("Z "); 
+            a+=1;
+          }
+          printf("\n");
+          exit(1);
+        }
+
+        ht->tbl[(idx-shift) & ht->mask] = b;
+        ht->tbl[idx] = 0;
+        idx = (idx + 1) & ht->mask;
+        b = ht->tbl[idx];
+      }
+      
+    }
+
+    idx = (idx + 1) & ht->mask;
+    b = ht->tbl[idx];
+
+  }
+*/
+} 
 
 
 // TODO

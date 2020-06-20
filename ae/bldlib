@@ -1,4 +1,0 @@
-gcc -c -Wno-parentheses -Wno-switch-enum -Wno-unused-value ae.c -o ae.o
-gcc -c -Wno-parentheses -Wno-switch-enum -Wno-unused-value anet.c -o anet.o
-ar -rc libae.a ae.o anet.o
-
