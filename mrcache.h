@@ -34,8 +34,8 @@ typedef struct _getq_item_t {
 
   int type; // TODO use this and share pointers
   // Disk reads
-  disk_item_t diskItems[3];
-  int numReads, readsDone;
+  disk_item_t disk_items[3];
+  int num_reads, reads_done;
   char *key;
   int keylen;
 

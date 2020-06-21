@@ -195,7 +195,7 @@ void blocks_on_read_done( void *ptr ) {
 
   disk_item_t *di = (disk_item_t*)ptr;
   getq_item_t *qi = di->qi;
-  qi->readsDone += 1;
+  qi->reads_done += 1;
   conn_process_queue( di->conn );
 
   //free(((struct iovec*)iov)->iov_base);

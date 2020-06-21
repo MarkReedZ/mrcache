@@ -32,8 +32,8 @@ unsigned long tot = 0;
 static mr_loop_t *loop = NULL;
 struct settings settings;
 
-uint64_t mrq_diskBlocks[3];
-int      mrq_diskReads;
+uint64_t mrq_disk_blocks[3];
+int      mrq_disk_reads;
 
 hashtable_t *mrq_ht, *mrq_htnew;
 
@@ -277,24 +277,24 @@ void conn_process_queue( my_conn_t *conn ) {
         return;
       }
       if ( qi->type == 3 ) {
-        for ( int i=0; i < qi->readsDone; i++ ) { 
-          free(qi->diskItems[i].iov.iov_base); 
+        for ( int i=0; i < qi->reads_done; i++ ) { 
+          free(qi->disk_items[i].iov.iov_base); 
         }
       }
 
     } else {
 
       // Disk reads still outstanding - TODO do we need to wait for them all to return?
-      if ( qi->numReads > qi->readsDone ) return;
+      if ( qi->num_reads > qi->reads_done ) return;
  
-      if ( qi->numReads > 1 ) {
+      if ( qi->num_reads > 1 ) {
         printf("DELME more than 1 read!\n" );
         exit(1);
       }
 
       bool found = false; 
-      for ( int i=0; i < qi->readsDone; i++ ) { 
-        item *it = qi->diskItems[i].iov.iov_base;
+      for ( int i=0; i < qi->reads_done; i++ ) { 
+        item *it = qi->disk_items[i].iov.iov_base;
         char *itkey = it->data+it->size;
         //printf(" item from disk key: %.*s\n", it->keysize, itkey);
 
@@ -331,8 +331,8 @@ void conn_process_queue( my_conn_t *conn ) {
           }
           found = true;
         }
-        free(qi->diskItems[i].iov.iov_base); 
-        qi->diskItems[i].iov.iov_base = NULL;
+        free(qi->disk_items[i].iov.iov_base); 
+        qi->disk_items[i].iov.iov_base = NULL;
 
  
       }
@@ -501,7 +501,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       DBG_READ printf("get key %d >%.*s<\n", keylen, keylen, key );
       unsigned long hv = CityHash64(key, keylen);      
       item *it = NULL;
-      mrq_diskReads = 0;
+      mrq_disk_reads = 0;
       int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
 
       settings.tot_reads += 1;
@@ -546,16 +546,16 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         // Disk
         getq_item_t *qi = calloc(1, sizeof(getq_item_t));
         qi->type = 3;
-        qi->numReads = mrq_diskReads;
+        qi->num_reads = mrq_disk_reads;
         qi->keylen = keylen;
         qi->key = malloc( keylen );
         memcpy( qi->key, key, keylen );
 
         // Kick off the disk IO
-        for (int i=0; i < mrq_diskReads; i++ ) {
-          qi->diskItems[i].qi = qi;
-          qi->diskItems[i].conn = conn;
-          blocks_fs_read( mrq_diskBlocks[i], &(qi->diskItems[i]) );
+        for (int i=0; i < mrq_disk_reads; i++ ) {
+          qi->disk_items[i].qi = qi;
+          qi->disk_items[i].conn = conn;
+          blocks_fs_read( mrq_disk_blocks[i], &(qi->disk_items[i]) );
         }
 
         // Queue it up in the output

@@ -53,8 +53,8 @@ int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **out
         if ( (key[keylen-1]&0xF) == GET_KEY(blockAddress) ) {
 
           disk = true;
-          if ( mrq_diskReads < 3 ) {
-            mrq_diskBlocks[mrq_diskReads++] = blockAddress;
+          if ( mrq_disk_reads < 3 ) {
+            mrq_disk_blocks[mrq_disk_reads++] = blockAddress;
           }
 
         }
