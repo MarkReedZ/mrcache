@@ -1,6 +1,6 @@
-# mrcache
+# Mrcache
 
-Mrcache is a key value store ala memcached with support for compression and disk.  Mrcache focuses on speed and limiting overhead to <20B per item which results in several limitations: the max size for a key is 32kb and value is 2mb.  It also requires linux kernel 5.4+ as it uses io_uring which is 2-4x faster than epoll. 
+Mrcache is a key value store with support for compression and disk.  Mrcache focuses on speed and limiting overhead to <20B per item which results in several limitations: the max size for a key is 32kb and value is 2mb.  It also requires linux kernel 5.4+ as it uses io_uring which is 2-4x faster than epoll. 
 
 # Benchmarks
 
@@ -8,20 +8,21 @@ Mrcache is a key value store ala memcached with support for compression and disk
 GET - 16B
 
 pipelining
-  mrcache (io_uring)  5.7m
-  redis               1.3m
-  memcached           700k
+  mrcache         2.7m
+  redis           1.0m
+  memcached       700k
 
 no pipelining
   mrcache (io_uring)  215k
   redis               112k
   mrcache (epoll)     100k
 
-GET - 100kb
+GET - 10kb
 
-  mrcache (io_uring)   36k
-  memcached            38k
-  redis                10k
+  mrcache        250k
+  mrcache (zstd)  70k
+  memcached       38k
+  redis           65k
 
 ```
 
@@ -43,7 +44,7 @@ Mrcache Version 0.1
     -m, --max-memory=<mb>         Maximum amount of memory in mb (default: 256)
     -d, --max-disk=<gb>           Maximum amount of disk in gb (default: 1)
     -i, --index-size=<mb>         Index size in mb (must be a power of 2 and sz/14 is the max number of items)
-    -z, --zstd                    Enable zstd compression in memory
+    -z, --zstd                    Enable zstd compression 
 ```
 
 The following command line will start up with 16mb of memory, 1gb of disk, and 1mb of index while using zstd compression for the stored values.
@@ -55,7 +56,7 @@ The following command line will start up with 16mb of memory, 1gb of disk, and 1
 If you don't specify the disk size then Mrcache will operate as an in memory cache.
 
 ```
-./mrcache -m 1024 -z 
+./mrcache -m 1024 
 ```
 
 # Clients
@@ -72,17 +73,20 @@ If you don't specify the disk size then Mrcache will operate as an in memory cac
 
 # TODO
 
-- [Zstandard](https://facebook.github.io/zstd/) offers various compression levels and allows you to train a dictionary. We need to allow both to be set and could provide an example JSON trained dictionary.
+- [Zstandard](https://facebook.github.io/zstd/) offers various compression levels and allows you to train a dictionary. We need to support both and could provide an example JSON trained dictionary.
 - We only support get and set.  
 - We don't support TTL
+- Need to track more stats and return them on a STATS cmd
 
 # Limitations
 
-Key size is limited to <32kb and values are limited to <2mb due to the focus on maximizing speed and limiting per item memory overhead. You must also specify the size of your index as the index is allocated at startup and does not grow or shrink.  Index overhead is ~14 bytes meaning if you allocate 16mb to the index you can store a little over a million items before the cache becomes full.  If you have 4gb of memory and 1TB of disk space with 10kb items to store then you can fit 100 million items on disk and would need to allocate 1.4gb to the index.
+Key size is limited to <32kb and values are limited to <2mb due to the focus on maximizing speed and limiting per item memory overhead. 
+
+You must also specify the size of your index as the index is allocated at startup and does not grow or shrink.  Index overhead is ~14 bytes meaning if you allocate 16mb to the index you can store a little over a million items before the cache becomes full.  If you have 4gb of memory and 1TB of disk space with 10kb items to store then you can fit 100 million items on disk and would need to allocate 1.4gb to the index.
 
 # Internals
 
-Mrcache has an item overhead of 18 bytes vs 50 to 60 for redis and memcached.  This is achieved by using an open addressing hash table and writing items into 2mb blocks in memory.  Instead of using pointers we store the block number and offset in order to retrieve the item which saves space allowing us to pack more information into the 8 bytes stored in the index hash table.  i
+Mrcache has an item overhead of 18 bytes vs 50 to 60 for redis and memcached.  This is achieved by using an open addressing hash table and writing items into 2mb blocks in memory.  Instead of using pointers we store the block number and offset in order to retrieve the item which saves space allowing us to pack more information into the 8 bytes stored in the index hash table.  
 
 The open addressing hash table is an in memory index for all of our items.  When hash collisions occur instead of having a linked list of items for that 'bucket' we increment the hash value and store our item in the first open spot.  To retrieve an item we compare our key against the item's key and increment the hash until we find our item or an empty spot in the index.  On average 2 items will be tested for each get if the cache is full.  For items stored on disk we keep the last byte of the key in the index to avoid unnecessary reads to disk for the key comparisons. 
 
