@@ -1,0 +1,9 @@
+
+get:  [version] [cmd=1] [keylen] [key]
+set:  [version] [cmd=2] [keylen] [valuelen] [key] [value]
+
+version is 1 byte 
+cmd is 1 byte
+keylen is 2 bytes so max 65,536
+valuelen is 4 bytes so max 4,294,967,295
+

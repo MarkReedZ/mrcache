@@ -31,11 +31,15 @@ struct settings {
   int block_size;  // mb
   uint32_t flags;
   mr_loop_t *loop;
+
+  // Stats
   uint64_t tot_reads;
   uint64_t read_shifts;
   uint64_t tot_writes;
   uint64_t write_shifts;
   uint32_t max_shift;
+  uint64_t misses;
+  uint64_t value_bytes, compressed_bytes;
 };
 
 extern struct settings settings;

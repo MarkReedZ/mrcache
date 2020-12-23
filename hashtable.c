@@ -10,11 +10,8 @@
 void ht_init(hashtable_t *ht, uint32_t sz) {
 
   int index_len = sz >> 3;
-  printf(" index_len %d\n", index_len);
   ht->mask = index_len - 1;
-  printf(" htmask %x\n", ht->mask);
   ht->max_size = index_len * 0.70;
-  printf(" max items %d\n", ht->max_size);
   ht->size = 0;
   ht->index_size = index_len;
 
@@ -81,25 +78,17 @@ static int num_inserts = 0;
 // TODO Can pass in the item to avoid an extra translate
 void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
   DBG_SET printf("ht_insert blkadr 0x%lx key >%.*s<\n", blockAddr, keylen, key);
-  bool print = false;
 
   num_inserts += 1;
-  if ((num_inserts%100000) == 0) printf(" max shift %d \n",settings.max_shift);
 
   uint32_t hash = hv & ht->mask;
   uint32_t ohash = hv & ht->mask;
-  if ( hash == 113977 ) print = true;
-  if ( hash == 11977 ) print = true;
-  if ( hash == 1221977 ) print = true;
-  if ( hash == 12331977 ) print = true;
-  //if ( hash == 18349 ) print = true;
 
 
   uint64_t shift = 0;
   item *it = blocks_translate(ht->tbl[hash]);
   while (it) {
     char *itkey = it->data+it->size;
-    if ( print ) { printf("ohash %d hash %d %.*s it key %.*s max shift %d\n",ohash, hash, keylen, key, it->keysize, itkey, settings.max_shift ); }
     if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
       blocks_decrement(ht->tbl[hash]);
   
@@ -123,80 +112,13 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
   SET_SHIFT( blockAddr, shift );
   SET_KEY( blockAddr, key[keylen-1] );
   ht->tbl[hash] = blockAddr;
-  if ( print ) { printf("ohash %d hash %d %.*s shift %ld %ld\n",ohash, hash, keylen, key, shift, GET_SHIFT(blockAddr)); }
       
   ht->size += 1;
-  // Random LRU an item if full
+
+
+  // LRU if full
   if ( ht->size > ht->max_size ) {
-    ht->size -= 1;
-
-    uint32_t i = rand() % ht->index_size;
-    while ( ht->tbl[i] == 0 ) i = rand() % ht->index_size;
-    ht->tbl[i] = 0;
-
-//i-1 39018 != hash 16463 + shift 6
-
-
-    // Shift items over if they belong 
-    i+=1;
-    uint64_t tmp = ht->tbl[i];
-    shift = GET_SHIFT(tmp);
-
-      item *it = blocks_translate(tmp);
-      if ( it ) {
-        char *itkey = it->data+it->size;
-        unsigned long zhv = CityHash64(itkey, it->keysize);
-        hash = zhv & ht->mask;
-  
-        if ( i != ((hash+shift)&ht->mask) ) {
-          printf("i %d != hash %d + shift %ld\n",i, hash, shift);
-          printf("i %08x != %08lx\n",i, (hash+shift)&ht->mask);
-          exit(1);
-        }
-      }
-
-    while ( shift ) {
-      shift -= 1;
-      SET_SHIFT(tmp, shift);
-      ht->tbl[i-1] = tmp;
-      ht->tbl[i] = 0;
-
-/*
-      item *it = blocks_translate(tmp);
-      char *itkey = it->data+it->size;
-      unsigned long zhv = CityHash64(itkey, it->keysize);
-      hash = zhv & ht->mask;
-
-      if ( i-1 != hash+shift ) {
-        printf("i-1 %d != hash %d + shift %d\n",i-1, hash, shift);
-        printf("max shift %d!\n",settings.max_shift);
-        exit(1);
-      }
-*/
-
-      if ( shift == 0 ) {
-
-        item *it = blocks_translate(tmp);
-        char *itkey = it->data+it->size;
-        unsigned long hv = CityHash64(itkey, it->keysize);
-        hash = hv & ht->mask;
-
-        if ( hash != i-1 ) {
-          printf("i %d != hash %d\n",i, hash);
-          printf("max shift %d!\n",settings.max_shift);
-          exit(1);
-        }
-
-    	}
-
-      i+=1;
-      tmp = ht->tbl[i];
-      shift = GET_SHIFT(tmp);
-      //if ( GET_SHIFT(ht->tbl[i+1]) ) {
-        //printf(" YAY shifted! %ld %08lx\n", GET_SHIFT(ht->tbl[i+1]), ht->tbl[i+1]);
-        //exit(1);
-      //}
-    }
+    blocks_lru(); 
   } 
 
 }
@@ -238,9 +160,22 @@ void ht_verify(hashtable_t *ht, uint32_t idx, uint32_t stop) {
     char *itkey = it->data+it->size;
     unsigned long hv = CityHash64(itkey, it->keysize);
     uint64_t hash = hv & ht->mask;
+    int shift = GET_SHIFT(b);
 
-    if ( hash != idx ) {
-      printf("i %d != hash %ld\n",i, hash);
+    if ( ((hash+shift)&ht->mask) != idx ) {
+      int z = idx-4;
+      uint64_t a = (idx-4)&ht->mask;
+      if ( z < 0 ) a = (ht->mask+1) + z;
+      printf("ht_verify i %d != hash %ld shift is %d a is %ld max_shift %d\n",i, hash, GET_SHIFT(b), a,settings.max_shift);
+      for (int z = 0; z < 20; z++ ) {
+        if ( ht->tbl[a] == 0 ) printf("0 ");
+        else if ( blocks_is_mem(ht->tbl[a]) ) printf("M ");
+        else if ( blocks_is_lru(ht->tbl[a]) ) printf("L ");
+        else printf("Z "); 
+        a+=1;
+      	a &= ht->mask;
+      }
+      printf("\n");
       exit(1);
     }
     
@@ -251,18 +186,18 @@ void ht_clear_lru(hashtable_t *ht, uint32_t idx, uint32_t stop) {
   while ( idx < stop ) {
     //printf(" idx %d %d %d\n",idx,stop, ht->index_size);
 
-
     uint64_t b = ht->tbl[idx];
     if ( b != 0 && blocks_is_lru(b) ) {
-      ht->tbl[idx] = 0;
+      ht->tbl[idx] = 0; // TODO duplicate = 0
 
       int shift = 1;
       while(b) {
-        while( b != 0 && blocks_is_lru(b) ) {
+        if ( blocks_is_lru(b) ) {
           ht->tbl[idx] = 0;
           idx = (idx + 1) & ht->mask;
           b = ht->tbl[idx];
           shift += 1;
+          continue;
         }
         if ( b == 0 ) break;
         int bshift = GET_SHIFT(b);
@@ -270,9 +205,53 @@ void ht_clear_lru(hashtable_t *ht, uint32_t idx, uint32_t stop) {
           idx = (idx + 1) & ht->mask;
           break;
         }
+
+/*
+        item *it = blocks_translate(b);
+        if ( it ) {
+          printf(" DELME sz %d keysz %d b %016x idx %d\n",it->size,it->keysize, b, idx);
+          char *itkey = it->data+it->size;
+          unsigned long hv = CityHash64(itkey, it->keysize);
+          uint64_t hash = hv & ht->mask;
+          if ( hash == 2097151 ) {
+            printf(" DELME 2097151 bshift %d shift %d hv %08lx\n", bshift, shift, hv );
+          }
+        }
+*/
+        //if ( bshift > 0xFF ) { printf("bshift! idx %d\n", idx); exit(1); }
         //if ( bshift ) { printf("bshift! idx %d\n", idx); exit(1); }
         if ( bshift < shift ) shift = bshift;
+        uint64_t before = b;
         SET_SHIFT(b, (bshift-shift));
+
+/*
+        if ( (b&0xFFFFFFC03FFFFFFFull) != (before&0xFFFFFFC03FFFFFFFull) ) {
+            printf("ERROR bad set shift bshift %d shft %d\n",bshift,shift);
+            printf(" DELME b   %016x idx %d\n",b, idx);
+            printf(" DELME bef %016x idx %d\n",before, idx);
+            printf(" mask      FFFFFFC03FFFFFFF\n");
+            if ( blocks_is_lru(b) ) printf(" DELME LRU WTF\n"); 
+            exit(1);
+        }
+
+        item *itt = blocks_translate(b); // DELME DBG
+        if ( itt ) {
+          if ( itt->size == 0x76767676 ) {
+            printf("ERROR bad item after shift\n");
+            printf(" DELME sz %d keysz %d b %016x idx %d\n",itt->size,itt->keysize, b, idx);
+            exit(1);
+          } 
+          if ( itt->size > (2*1024*1024) ) {
+            printf("ERROR bad item after shift\n");
+            printf(" DELME sz %d keysz %d b %016x idx %d\n",itt->size,itt->keysize, b, idx);
+            exit(1);
+          } 
+        } else {
+          printf("ERROR no item after shift\n");
+          exit(1);
+        }
+*/
+
         ht->tbl[(idx-shift) & ht->mask] = b;
         ht->tbl[idx] = 0;
         idx = (idx + 1) & ht->mask;

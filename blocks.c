@@ -1,6 +1,5 @@
 
 
-
 #include "mrcache.h"
 #include "blocks.h"
 #include "hashtable.h"
@@ -58,7 +57,7 @@ void blocks_init() {
     }
     fsblock_index = 0;
     fsblock_size = 0;
-    fsblock_min_block = -1;
+    fsblock_min_block = min_block;
   }
 }
 
@@ -96,13 +95,11 @@ void blocks_lru() {
   } else {
     fsblock_min_block = min_block+1;
   }
-  
 
   // Which ht to decrement?
   ht_decrement(mrq_ht, n); 
   items_in_block[ i ] = 0;
   min_block += 1; 
-
   
 }
 
@@ -153,9 +150,10 @@ bool blocks_is_mem( uint64_t blockAddr ) {
   if ( blk >= min_block ) return true;
   return false;
 }
+
 bool blocks_is_lru( uint64_t blockAddr ) {
   uint64_t blk = GET_BLOCK(blockAddr);
-  //if ( blk < min_block && blk >  ) return true;
+  //if ( blk < min_block && blk >  ) return true; // TODO rollover?
   if ( blk < fsblock_min_block ) return true; // When not using disk fsblock min needs to be equal to min_block
   return false;
 }

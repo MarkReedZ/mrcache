@@ -71,6 +71,7 @@ static char resp_get_not_found_len = 6;
 
 uint64_t num_bits64 (uint64_t x) { return 64 - __builtin_clzll(x); }
 
+static char *zstd_buffer;
 static void setup() {
   mrq_ht = malloc( sizeof(hashtable_t) );
   ht_init(mrq_ht, settings.index_size * 1024 * 1024);
@@ -79,25 +80,12 @@ static void setup() {
   //srand(1); // TODO
   srand((int)time(NULL));
 
+  zstd_buffer = malloc( 2 * 1024 * 1024 + 128 );
 
-/*
-  char *k = "0123456";
-  printf("0: %lx\n", CityHash64(k, 1));      
-  printf("1: %lx\n", CityHash64(k+1, 1));      
-  printf("2: %lx\n", CityHash64(k+2, 1));      
-  printf("3: %lx\n", CityHash64(k+3, 1));      
-  printf("4: %lx\n", CityHash64(k+4, 1));      
-  printf("01: %lx\n", CityHash64(k, 2));      
+}
 
-  k = "test129845";
-  unsigned long hv = CityHash64(k, 10);
-  printf("test129845: %lx\n", CityHash64(k, 10));      
-  k = "test277238";
-  hv = CityHash64(k, 10);
-  printf("test277238: %lx\n", CityHash64(k, 10));      
-*/
-  //exit(1);
-  
+static void tear_down() {
+  free(zstd_buffer);
 }
 
 static void print_buffer( char* b, int len ) {
@@ -117,8 +105,8 @@ int clear_lru_timer( void *user_data ) {
   //double start_time = clock();
   int stop = idx+10000;
   if ( stop > mrq_ht->index_size ) stop = mrq_ht->index_size-2;
-  //ht_clear_lru( mrq_ht, idx, stop );
-  ht_verify( mrq_ht, idx, stop );
+  ht_clear_lru( mrq_ht, idx, stop );
+  ht_verify( mrq_ht, idx, stop ); // TODO DBG Remove this
   idx += 10000;
   if ( idx > mrq_ht->index_size ) idx = 0;
   //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
@@ -129,7 +117,6 @@ int clear_lru_timer( void *user_data ) {
 
 
 void *setup_conn(int fd, char **buf, int *buflen ) {
-  //printf("New Connection\n");
   my_conn_t *c = calloc( 1, sizeof(my_conn_t));
   c->fd = fd;
   c->buf = malloc( BUFFER_SIZE*2 );
@@ -143,9 +130,11 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
 }
 
 void free_conn( my_conn_t *c ) {
+  mr_close( loop, c->fd );
   free(c->buf);
   free(c->recv_buf);
   free(c->out_buf);
+  // TODO free the output queue items?
   free(c);
 }
 
@@ -438,15 +427,19 @@ void finishOnData( my_conn_t *conn ) {
 
 
 
-void on_data(void *c, int fd, ssize_t nread, char *buf) {
+int on_data(void *c, int fd, ssize_t nread, char *buf) {
   my_conn_t *conn = (my_conn_t*)c;
   char *p = NULL;
   int data_left = nread;
 
-  // TODO close in mr loop and have a closed callback
+  if ( nread == 0 ) { 
+    free_conn(c);
+    return 1;
+  }
+
   if ( nread < 0 ) { 
     free_conn(c);
-    return;
+    return 1;
   }
   bytes += nread; 
 
@@ -458,7 +451,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       data_left = conn->cur_sz;
       conn->cur_sz = 0;
     } else {
-      return;
+      return 0;
     }
   } else {
     p = buf;
@@ -470,9 +463,10 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       conn_append( conn, p, data_left );
       conn->needs = 2;
       finishOnData(conn);
-      return;
+      return 0;
     }
 
+    // TODO check the first byte and bail if its bad
     int cmd   = (unsigned char)p[1];
 
 
@@ -486,16 +480,17 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         conn_append( conn, p, data_left );
         conn->needs = 4;
         finishOnData(conn);
-        return;
+        return 0;
       }
       uint16_t keylen = *((uint16_t*)(p+2));
       char *key = p+4;
+      DBG_READ printf("get keylen %d\n", keylen );
 
       if ( data_left < 4+keylen ) {
         conn_append( conn, p, data_left );
         conn->needs = 4+keylen;
         finishOnData(conn);
-        return;
+        return 0;
       }
 
       DBG_READ printf("get key %d >%.*s<\n", keylen, keylen, key );
@@ -539,6 +534,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
           if ( conn->getq_head ) conn_queue_item( conn, it );
           else                   conn_write_item( conn, it );
           DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
+          DBG_READ print_buffer( it->data, it->size );
 
         }
       } else if ( rc==2 ) {
@@ -574,6 +570,7 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
           if ( n ) conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
         }
 
+        settings.misses += 1;
         DBG_READ printf("getkey - not found\n");
       }
 
@@ -587,30 +584,35 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         conn_append( conn, p, data_left );
         conn->needs = 8;
         finishOnData(conn);
-        return;
+        return 0;
       }
       uint16_t keylen = *((uint16_t*)(p+2));
       uint32_t vlen = *((uint32_t*)(p+4));
+      DBG printf("set keylen %d vlen %d\n", keylen, vlen );
 
       if ( data_left < 8+keylen+vlen ) {
         conn_append( conn, p, data_left );
         conn->needs = 8+keylen+vlen;
         finishOnData(conn);
-        return;
+        return 0;
       }
 
       char *key = p+8;
       DBG printf("set key %d >%.*s<\n", keylen, keylen, key );
       char *val = p+8+keylen;
       DBG printf("set val %d >%.*s<\n", vlen, vlen, val );
+      DBG print_buffer( val, vlen );
 
       uint64_t blockAddr;
       item *it;
 
+      settings.tot_writes += 1;
+
       if ( COMPRESSION_ENABLED ) {
-        blockAddr = blocks_alloc( sizeof(item) + vlen + keylen + 64 );
-        it = blocks_translate( blockAddr );
-        int rc = ZSTD_compress( it->data, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
+        //blockAddr = blocks_alloc( sizeof(item) + vlen + keylen + 64 );
+        //it = blocks_translate( blockAddr );
+        //int rc = ZSTD_compress( it->data, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
+        int cmplen = ZSTD_compress( zstd_buffer, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
 
         //if ( ZSTD_isError(rc) ) {
           //const char *err = ZSTD_getErrorName(rc);
@@ -619,15 +621,25 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
         //}
 
         // If successful store it otherwise ignore this cmd
-        if ( rc > 0 ) {
-          int compressed_size = it->size = rc;
+        if ( cmplen > 0 ) {
+
+          blockAddr = blocks_alloc( sizeof(item) + cmplen + keylen );
+          it = blocks_translate( blockAddr );
           it->keysize = keylen;
-          memcpy( it->data+compressed_size, p+8, keylen ); // Key goes after val
+          it->size = cmplen;
+          memcpy( it->data, zstd_buffer, cmplen ); // Copy in the compressed value
+          memcpy( it->data+cmplen, p+8, keylen ); // Key goes after val
+
+          //int compressed_size = it->size = rc;
+          //it->keysize = keylen;
+          //memcpy( it->data+compressed_size, p+8, keylen ); // Key goes after val
+
+
           data_left -= (8 + keylen + vlen);
           p += 8 + keylen + vlen;
 
           // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
-          if ( settings.disk_size ) SET_DISK_SIZE( blockAddr, num_bits64(compressed_size+8+keylen));
+          if ( settings.disk_size ) SET_DISK_SIZE( blockAddr, num_bits64(cmplen+8+keylen));
           unsigned long hv = CityHash64(key, keylen);      
           ht_insert( mrq_ht, blockAddr, key, keylen, hv );
 
@@ -657,29 +669,33 @@ void on_data(void *c, int fd, ssize_t nread, char *buf) {
       num_writes += 1;
 
     } else if ( cmd == STAT ) {
+
       printf("STAT\n");
-      printf("Total reads %ld\n", settings.tot_reads);
+      printf("Total reads  %ld\n", settings.tot_reads);
+      printf("Total misses %ld\n", settings.misses);
+      printf("Total writes %ld\n", settings.tot_writes);
       printf("Avg shift %.2f\n", (double)settings.read_shifts/settings.tot_reads);
       printf("Max shift %d\n", settings.max_shift);
-      data_left -= 2;
-      p += 2;
-      settings.tot_reads = 0;
-      settings.read_shifts = 0;
       ht_stat(mrq_ht);
       //ht_clear_lru_full( mrq_ht, 0, 0 );
       //printf("After full clear\n");
       //ht_stat(mrq_ht);
       //exit(1);
 
+      data_left -= 2;
+      p += 2;
 
-    } else { // Close connection? TODO
+    } else { 
+      // Invalid cmd
       data_left = 0;
+      free_conn(conn);
+      return 1; // Tell mrloop we closed the connection
     }
   } 
 
   finishOnData(conn);
 
-  return;
+  return 0;
 }
 
 static void sig_handler(const int sig) {
@@ -776,10 +792,11 @@ int main (int argc, char **argv) {
 
   setup();
 
+  double max_items = (double)(settings.index_size>>3)*0.70; // Each entry is 8B max 70% full
   if ( settings.disk_size ) {
-    printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", settings.port, settings.max_memory, settings.disk_size, ((double)settings.index_size/14), settings.index_size );
+    printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", settings.port, settings.max_memory, settings.disk_size, max_items, settings.index_size );
   } else {
-    printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, ((double)settings.index_size/14) );
+    printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, max_items );
   }
 
   loop = mr_create_loop(sig_handler);
@@ -788,6 +805,8 @@ int main (int argc, char **argv) {
   mr_add_timer(loop, 0.1, clear_lru_timer, NULL);
   mr_run(loop);
   mr_free(loop);
+
+  tear_down();
 
   return 0;
 }
