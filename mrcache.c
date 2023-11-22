@@ -80,7 +80,7 @@ static void setup() {
   //srand(1); // TODO
   srand((int)time(NULL));
 
-  zstd_buffer = malloc( 2 * 1024 * 1024 + 128 );
+  zstd_buffer = malloc( 16 * 1024 * 1024 + 128 );
 
 }
 
@@ -105,8 +105,6 @@ int clear_lru_timer( void *user_data ) {
   //double start_time = clock();
   int stop = idx+10000;
   if ( stop > mrq_ht->index_size ) stop = mrq_ht->index_size-2;
-  ht_clear_lru( mrq_ht, idx, stop );
-  ht_verify( mrq_ht, idx, stop ); // TODO DBG Remove this
   idx += 10000;
   if ( idx > mrq_ht->index_size ) idx = 0;
   //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
@@ -498,6 +496,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       item *it = NULL;
       mrq_disk_reads = 0;
       int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
+      DBG_READ printf("get ht_find rc %d\n", rc );
 
       settings.tot_reads += 1;
 
@@ -638,8 +637,6 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
           data_left -= (8 + keylen + vlen);
           p += 8 + keylen + vlen;
 
-          // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
-          if ( settings.disk_size ) SET_DISK_SIZE( blockAddr, num_bits64(cmplen+8+keylen));
           unsigned long hv = CityHash64(key, keylen);      
           ht_insert( mrq_ht, blockAddr, key, keylen, hv );
 
@@ -659,8 +656,6 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
         data_left -= (8 + keylen + vlen);
         p += 8 + keylen + vlen;
 
-        // Store the number of bits so if on disk we can allocate a big enough buffer to hold it
-        if ( settings.disk_size ) SET_DISK_SIZE( blockAddr, num_bits64(vlen+8+keylen));
         unsigned long hv = CityHash64(key, keylen);      
         ht_insert( mrq_ht, blockAddr, key, keylen, hv );
       }
@@ -677,10 +672,6 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       printf("Avg shift %.2f\n", (double)settings.read_shifts/settings.tot_reads);
       printf("Max shift %d\n", settings.max_shift);
       ht_stat(mrq_ht);
-      //ht_clear_lru_full( mrq_ht, 0, 0 );
-      //printf("After full clear\n");
-      //ht_stat(mrq_ht);
-      //exit(1);
 
       data_left -= 2;
       p += 2;
@@ -710,7 +701,7 @@ static void usage(void) {
           "    -m, --max-memory=<mb>         Maximum amount of memory in mb (default: 256)\n"
           "    -d, --max-disk=<gb>           Maximum amount of disk in gb (default: 1)\n"
           "    -i, --index-size=<mb>         Index size in mb (must be a power of 2 and sz/14 is the max number of items)\n"
-          "    -z, --zstd                    Enable zstd compression in memory\n"
+          "    -z, --zstd                    Enable zstd compression\n"
           "\n"
         );
 }
@@ -744,7 +735,7 @@ int main (int argc, char **argv) {
   settings.flags = 0;
   settings.disk_size = 0;
   settings.index_size = 0;
-  settings.block_size = 2;
+  settings.block_size = 16;
 
   settings.read_shifts  = 0;
   settings.tot_reads    = 0;
@@ -780,12 +771,16 @@ int main (int argc, char **argv) {
   }
 
   if ( settings.index_size == 0 ) {
-    printf("The index size is a required option\n");
-    usage();
-    return(2);
+    // By default the index size is 10% of memory rounded up to a power of 2
+    settings.index_size = (settings.max_memory * 0.1);
+    int power = 1;
+    while(power < settings.index_size) {
+        power <<= 1;
+    }
+    settings.index_size = power;
   }
   if ( !IS_POWER_OF_TWO(settings.index_size) ) {
-    printf("The index size must be a power of two\n");
+    printf("The index size must be a power of two\n\n");
     usage();
     return(2);
   }

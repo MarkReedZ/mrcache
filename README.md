@@ -5,24 +5,18 @@ Mrcache is a key value store with support for compression and disk.  Mrcache foc
 # Benchmarks
 
 ```
-GET - 16B
+GET - 16B ops/sec
 
-pipelining
-  mrcache         2.7m
-  redis           1.0m
-  memcached       700k
+  mrcache        1.07m 
+  redis           270k
+  memcached       100k
 
-no pipelining
-  mrcache (io_uring)  215k
-  redis               112k
-  mrcache (epoll)     100k
+GET - 10kb ops/sec
 
-GET - 10kb
-
-  mrcache        250k
-  mrcache (zstd)  70k
-  memcached       38k
-  redis           65k
+  mrcache        179k
+  mrcache (zstd)  79k
+  memcached       24k
+  redis           32k
 
 ```
 

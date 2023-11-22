@@ -1,7 +1,5 @@
 
 #// 26 bits block id, 8 bits shift distance, 4 bits last key byte, 5 bits storage, 21 bits value
-print( " DELME sz 1751672936 keysz 26728 b 9816750e idx 422567")
-
 
 def prt(b):
   print( " block id ", b >> 38 )

@@ -6,12 +6,12 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
 #define NUM 1000
-#define PIPE 64
+#define PIPE 10
 static int bytes = 0;
 static struct iovec iovs[128];
 static double start_time = 0;
 static int reps = 0;
-static int vlen = 100;
+static int vlen = 10;
 
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
@@ -44,13 +44,13 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
 }
 
 void on_data(void *conn, int fd, ssize_t nread, char *buf) {
-  //printf("on_data >%.*s<\n", nread, buf);
+  printf("on_data >%.*s<\n", nread, buf);
   bytes += nread;
-  //printf("bytes: %d\n", bytes);
-  //printf("bytes: %d\n", PIPE*32);
+  printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
   if ( bytes >= PIPE*(22+vlen) ) {
     bytes = 0;
     reps += 1;
+    printf("rep %d\n", reps);
     if ( reps < NUM ) {
       //mr_writev( loop, fd, iovs, PIPE );
       //for( int i = 0; i < 100; i++ ) {

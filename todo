@@ -1,0 +1,9 @@
+
+Block ids loop back to 0
+Test write of lru block
+Test read from disk
+Fuzz read write test
+Test block just full
+Insert has to be disk aware!
+
+

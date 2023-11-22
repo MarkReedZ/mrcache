@@ -8,14 +8,14 @@ static struct timeval  tv1, tv2;
 static int buf_index = 0;
 
 static int num_values = 10;
-static int vlen = 16;
+static int vlen = 10*1024;
 static char *values[10];
 static char *obufs[10];
 static int obuf_lens[10];
 
 #define BUFSIZE 2*1024*1024
 #define NUM 10000
-#define PIPE 64
+#define PIPE 16
 
 static int bytes = 0;
 static int bw = 0;
@@ -85,7 +85,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
   }
 
   while ( left ) {
-    //printf( " itemcnt %d buf ", itemcnt); print_buffer( p, 16 ); //printf("\n");
+    //printf( " itemcnt %d buf ", itemcnt); print_buffer( p, 16 ); printf("\n");
     if ( left < 6 ) { leftover = left; needs = 6; memcpy( cbufp, p, left ); cbufp += left; return; }
     if ( p[0] != 0 && p[1] != 1 ) {
       printf(" bad response itemcnt %d\n",itemcnt);

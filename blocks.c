@@ -1,5 +1,11 @@
 
 
+//  Memory is statically allocated at startup as N blocks
+//    When full we just drop the oldest block
+//
+//  When using disk we do the same 
+//
+
 #include "mrcache.h"
 #include "blocks.h"
 #include "hashtable.h"
@@ -28,7 +34,7 @@ static int fsblock_min_block;
 static int num_fs_blocks;
 
 void blocks_init() {
-  blocks_bitlen = 20 + (settings.block_size>>1);
+  blocks_bitlen = 24;
   blocks_bytelen = 0x1ull << blocks_bitlen;
   num_blocks = settings.max_memory / settings.block_size;
   base = malloc( settings.max_memory * 1024 * 1024 );
@@ -61,16 +67,14 @@ void blocks_init() {
   }
 }
 
+// Allocate memory of sz bytes 
 uint64_t blocks_alloc( int sz ) {
 
-  // If we're going into the next block
+  // If the current block cannot hold the new item 
   if ( (cur_block_size+sz) > ((blocks_bytelen)-1) ) { // TODO make this a constant.  No variable block size
-    //printf("blocks alloc sz %d\n",sz);
-    //printf("blocks alloc cur %x\n",cur_block_size+sz);
-    //printf("blocks block sz %llx\n",((0x1ull<<blocks_bitlen)-1));
 
     if ( full ) blocks_lru();
-    else if ( cur_block == num_blocks-1 ) full = true;
+    else if ( cur_block == num_blocks-1 ) full = true; // Full is set once ever
 
     cur_block += 1;
     items_in_block[ cur_block%num_blocks ] = 0;
@@ -81,7 +85,7 @@ uint64_t blocks_alloc( int sz ) {
 
   cur += sz;
   cur_block_size += sz;
-  items_in_block[ cur_block%num_blocks ] += 1;
+  items_in_block[ cur_block%num_blocks ] += 1; // So we can tell the hashtable how many items were dropped on LRU
 
   return (cur_block << BLOCK_SHIFT) | (cur_block_size-sz);
 }
@@ -96,17 +100,16 @@ void blocks_lru() {
     fsblock_min_block = min_block+1;
   }
 
-  // Which ht to decrement?
-  ht_decrement(mrq_ht, n); 
+  ht_decrement(mrq_ht, n); // Tell the hashtable how many items were dropped TODO what about items on disk?
   items_in_block[ i ] = 0;
-  min_block += 1; 
+  min_block += 1;  // Items dropped are still in the hashtable. Min block tells us if they are still valid in memory or not
   
 }
 
 void *blocks_translate( uint64_t blockAddr ) {
   uint64_t blk = GET_BLOCK(blockAddr);
   if ( blk < min_block ) return NULL;
-  uint32_t off = blockAddr & 0x1FFFFF; // TODO bitlen?
+  uint32_t off = blockAddr & BLOCK_BITMASK; 
   return (base + ((blk%num_blocks)<<blocks_bitlen)) + off;
 }
 
@@ -206,11 +209,11 @@ void blocks_fs_read( uint64_t blockAddr, disk_item_t *di ) {
   int fsblk = (blk/64)%num_fs_blocks;
   int fd = fsblock_fds[fsblk];
 
-  int sz = 0x1ull << GET_DISK_SIZE(blockAddr);
+  int sz = 32 * 1024;
   di->iov.iov_base = malloc( sz );
   di->iov.iov_len = sz;
 
-  off_t off = ((blk-1)*blocks_bytelen) + (blockAddr & 0x1FFFFF);
+  off_t off = ((blk-1)*blocks_bytelen) + (blockAddr & BLOCK_BITMASK);
 
   // Passing di works as the iov is the first part of the struct
   mr_readvcb( settings.loop, fd, (struct iovec*)di, 1, off, di, blocks_on_read_done  );

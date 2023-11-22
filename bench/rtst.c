@@ -8,8 +8,8 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
 #define NUM 10000
-#define PIPE 1
-static int vlen = 10000;
+#define PIPE 5
+static int vlen = 10;
 static int bytes = 0;
 static struct iovec iovs[PIPE];
 static double start_time = 0;
@@ -44,14 +44,17 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
 }
 
 void on_data(void *conn, int fd, ssize_t nread, char *buf) {
-
+  printf("on_data >%.*s<\n", nread, buf);
   bytes += nread;
-  //printf("bytes: %d %d\n", bytes,PIPE*vlen);
+  printf("bytes: %d of %d\n", bytes,PIPE*vlen);
+  print_buffer(buf, nread);
   if ( bytes >= (PIPE)*(vlen+5) ) {
     bytes = 0;
     reps += 1;
+    printf("YAY reps %d\n", reps);
     if ( reps < NUM ) {
       int n = write( fd, obuf, olen );
+      printf("Did another obuf write n %d\n",n);
     } else {
       gettimeofday(&tv2, NULL);
       double secs = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
@@ -110,6 +113,7 @@ int main() {
   start_time = clock();
   gettimeofday(&tv1, NULL);
   n = write( fd, obuf, olen );
+  printf("First obuf write n %d\n",n);
 
   mr_run(loop);
   mr_free(loop);
