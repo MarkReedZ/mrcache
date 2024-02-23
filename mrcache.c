@@ -77,7 +77,6 @@ static void setup() {
   ht_init(mrq_ht, settings.index_size * 1024 * 1024);
   blocks_init();
 
-  //srand(1); // TODO
   srand((int)time(NULL));
 
   zstd_buffer = malloc( 16 * 1024 * 1024 + 128 );
@@ -95,24 +94,6 @@ static void print_buffer( char* b, int len ) {
   }
   printf("\n");
 }
-
-// Return 0 to stop the timer
-int clear_lru_timer( void *user_data ) {
-  static int idx = 0;
-
-  if ( mrq_ht  == NULL ) return 1;
-
-  //double start_time = clock();
-  int stop = idx+10000;
-  if ( stop > mrq_ht->index_size ) stop = mrq_ht->index_size-2;
-  idx += 10000;
-  if ( idx > mrq_ht->index_size ) idx = 0;
-  //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
-  //printf( " took %f \n ", taken);
-  
-  return 1;
-}
-
 
 void *setup_conn(int fd, char **buf, int *buflen ) {
   my_conn_t *c = calloc( 1, sizeof(my_conn_t));
@@ -797,7 +778,7 @@ int main (int argc, char **argv) {
   loop = mr_create_loop(sig_handler);
   settings.loop = loop;
   mr_tcp_server( loop, settings.port, setup_conn, on_data );
-  mr_add_timer(loop, 0.1, clear_lru_timer, NULL);
+  //mr_add_timer(loop, 0.1, clear_lru_timer, NULL);
   mr_run(loop);
   mr_free(loop);
 

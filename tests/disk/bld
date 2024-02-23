@@ -1,0 +1,5 @@
+
+CFLAGS='-O3'
+gcc -c tst.c -o tst.o ${CFLAGS}
+gcc tst.o -lmrloop -luring -lzstd -o tst ${CFLAGS}
+rm *.o
