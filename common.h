@@ -44,9 +44,6 @@ struct settings {
 
 extern struct settings settings;
 
-#define ENABLE_COMPRESSION  settings.flags |= 0x1
-#define COMPRESSION_ENABLED (settings.flags & 0x1)
-
 #define LIKELY(x)   (__builtin_expect(!!(x), 1))
 #define UNLIKELY(x) (__builtin_expect(!!(x), 0))
 

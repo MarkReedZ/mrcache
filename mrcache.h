@@ -7,6 +7,8 @@
 enum cmds {
   GET = 1,
   SET,
+  GETZ,
+  SETZ,
   STAT,
   CMDS_END
 };

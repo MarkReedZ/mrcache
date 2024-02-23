@@ -3,7 +3,7 @@
 //  Memory is statically allocated at startup as N blocks
 //    When full we just drop the oldest block
 //
-//  When using disk we do the same 
+//  When using disk we write the dropped blocks to disk and truncate the oldest when out of space
 //
 
 #include "mrcache.h"
