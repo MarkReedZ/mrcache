@@ -15,15 +15,9 @@ async def run(loop):
 
   rc = await asyncmrcache.create_client( "localhost", loop, lost_cb=lcb)
 
-  v = b"value" * 20
-  if 1:
-    for x in range(10):
-      k = bytes("test" + str(x), "utf-8")
-      await rc.set(k,v)
-
-  act = await rc.get(b"test2")
-  if v != act:
-    print( "Act >" + str(act) + "< != >" + str(v) + "<" )
+  k = b"test"
+  v = b"testtest"
+  await rc.set(k,v)
 
   await rc.close()
 

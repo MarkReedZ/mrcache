@@ -12,6 +12,7 @@ static struct iovec iovs[128];
 static double start_time = 0;
 static int reps = 0;
 static int vlen = 10;
+static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
@@ -21,6 +22,9 @@ static void print_buffer( char* b, int len ) {
   printf("\n");
 }
 
+void on_write_done(void *user_data) {
+  printf("on_write_done - %ld\n", (unsigned long)user_data);
+}
 
 typedef struct _conn
 {
@@ -43,18 +47,25 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
   return conn;
 }
 
-void on_data(void *conn, int fd, ssize_t nread, char *buf) {
-  printf("on_data >%.*s<\n", nread, buf);
+int on_data(void *conn, int fd, ssize_t nread, char *buf) {
+  //printf("on_data >%.*s<\n", 8, buf+28);
+  //print_buffer(buf, nread); 
+  //exit(-1);
   bytes += nread;
-  printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
-  if ( bytes >= PIPE*(22+vlen) ) {
+  //printf("bytes: %d of %d\n", bytes, PIPE*36);
+  //printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
+  //if ( bytes >= PIPE*(22+vlen) ) {
+  if ( bytes >= PIPE*36 ) {
     bytes = 0;
     reps += 1;
-    printf("rep %d\n", reps);
+    //printf("rep %d\n", reps);
     if ( reps < NUM ) {
       //mr_writev( loop, fd, iovs, PIPE );
       //for( int i = 0; i < 100; i++ ) {
-        mr_writev( loop, fd, iovs, PIPE );
+      mr_writev( loop, fd, iovs, PIPE );
+      //mr_writevcb( loop, fd, iovs, PIPE, (void*)reps, on_write_done  );
+      //printf("Writing again\n");
+      mr_flush(loop);
       //}
     } else {
       gettimeofday(&tv2, NULL);
@@ -70,7 +81,7 @@ void on_data(void *conn, int fd, ssize_t nread, char *buf) {
   //iov->iov_base = buf;
   //iov->iov_len  = nread;
   //mrWritev( loop, ((conn_t*)conn)->fd, iov, 1 );
-
+  return 0;
 }
 
 void sig_handler(const int sig) {
@@ -91,19 +102,30 @@ int main() {
   loop = mr_create_loop(sig_handler);
   int fd = mr_connect(loop,"localhost", 11211, on_data);
 
-  //char buf[256];
-  char *buf;
+  char buf[256], *p;
   struct iovec iov;
 
-  buf = "get test\r\n";
+  p = buf + 24;
+  memset(buf, 0, 256);
+  buf[0] = 0x80;
+  buf[3] = 0x4;
+  buf[11] = 0x4;
+  buf[24] = 0x74;
+  buf[25] = 0x65;
+  buf[26] = 0x73;
+  buf[27] = 0x74;
+
+  //buf = "get test\r\n";
 
   for( int i = 0; i < PIPE; i++ ) {
     iovs[i].iov_base = buf;
-    iovs[i].iov_len = strlen(buf);
+    //iovs[i].iov_len = strlen(buf);
+    iovs[i].iov_len = 28;
   }
   start_time = clock();
   gettimeofday(&tv1, NULL);
   mr_writev( loop, fd, iovs, PIPE );
+  //mr_writevcb( loop, fd, iovs, PIPE, (void*)reps, on_write_done  );
   mr_flush(loop);
 
 

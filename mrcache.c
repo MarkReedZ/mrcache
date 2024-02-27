@@ -96,6 +96,7 @@ static void print_buffer( char* b, int len ) {
 }
 
 void *setup_conn(int fd, char **buf, int *buflen ) {
+  printf(" DELME setup_conn fd %d\n",fd);
   my_conn_t *c = calloc( 1, sizeof(my_conn_t));
   c->fd = fd;
   c->buf = malloc( BUFFER_SIZE*2 );
@@ -855,7 +856,7 @@ int main (int argc, char **argv) {
   } else {
     printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, max_items );
   }
-
+  printf("DELME YAY\n");
   loop = mr_create_loop(sig_handler);
   settings.loop = loop;
   mr_tcp_server( loop, settings.port, setup_conn, on_data );
