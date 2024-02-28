@@ -6,12 +6,13 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
 #define NUM 10000
-#define PIPE 64
+#define PIPE 128
 static int bytes = 0;
 static struct iovec iovs[128];
 static double start_time = 0;
 static int reps = 0;
-static int vlen = 8;
+//static int vlen = 10000;
+static int vlen = 16;
 static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {

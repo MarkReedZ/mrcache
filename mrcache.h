@@ -44,7 +44,5 @@ typedef struct _getq_item_t {
 } getq_item_t;
 
 
-void can_write( void *conn, int fd );
-void conn_process_queue( my_conn_t *conn );
 
 
