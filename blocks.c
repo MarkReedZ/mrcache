@@ -161,7 +161,7 @@ bool blocks_is_lru( uint64_t blockAddr ) {
   return false;
 }
 
-void blocks_on_write_done( void *iov ) {
+void blocks_on_write_done( void *iov, int res ) {
   free(((struct iovec*)iov)->iov_base);
   free(iov);
 }
@@ -192,12 +192,12 @@ void blocks_fs_write( int blk ) {
 
 }
 
-void blocks_on_read_done( void *ptr ) {
+void blocks_on_read_done( void *ptr, int res ) {
 
-  disk_item_t *di = (disk_item_t*)ptr;
-  getq_item_t *qi = di->qi;
-  qi->reads_done += 1;
-  conn_process_queue( di->conn );
+  //disk_item_t *di = (disk_item_t*)ptr;
+  //getq_item_t *qi = di->qi;
+  //qi->reads_done += 1;
+  //conn_process_queue( di->conn );
 
   //free(((struct iovec*)iov)->iov_base);
   //free(iov);
