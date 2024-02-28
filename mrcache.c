@@ -40,8 +40,7 @@ hashtable_t *mrq_ht, *mrq_htnew;
 #define NUM_IOVEC 256
 typedef struct _conn
 {
-  char *buf, *recv_buf, *out_buf, *out_p;
-  int out_max_sz, out_cur_sz, out_written;
+  char *buf, *recv_buf;
   int max_sz;
   int cur_sz;
   int needs;
@@ -51,6 +50,7 @@ typedef struct _conn
   bool stalled;
 
   struct iovec iovs[NUM_IOVEC];
+  char free_me[NUM_IOVEC];
   int iov_start, iov_end, num_iov;
   int write_in_progress;
 } my_conn_t;
@@ -100,10 +100,9 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
   c->buf = malloc( BUFFER_SIZE*2 );
   c->recv_buf = malloc( BUFFER_SIZE );
   c->max_sz = BUFFER_SIZE*2;
-  c->out_buf = c->out_p = malloc( BUFFER_SIZE );
-  c->out_max_sz = BUFFER_SIZE;
   *buf = c->recv_buf;
   *buflen = BUFFER_SIZE;
+  memset(c->free_me, 0, NUM_IOVEC);
   return c;
 }
 
@@ -111,7 +110,6 @@ void free_conn( my_conn_t *c ) {
   mr_close( loop, c->fd );
   free(c->buf);
   free(c->recv_buf);
-  free(c->out_buf);
   // TODO free the output queue items?
   free(c);
 }
@@ -140,6 +138,12 @@ void on_write_done(void *user_data, int res) {
   }
   my_conn_t *conn = (my_conn_t*)user_data;
   conn->write_in_progress = 0;
+  for ( int i = conn->iov_start; i < conn->iov_end; i++ ) {
+    if ( conn->free_me[i] == 1 ) {
+      free(conn->iovs[i].iov_base);
+      conn->free_me[i] = 0;
+    }
+  }
   conn->iov_start = 0;
   conn->iov_end = 0;
 }
@@ -234,18 +238,21 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       if ( rc == 1 && it ) { // Found
 
-	conn->iovs[conn->iov_end].iov_base = ((char*)it)+2;
-	conn->iovs[conn->iov_end].iov_len  = it->size+4;
-	conn->iov_end += 1;
+	      conn->iovs[conn->iov_end].iov_base = resp_get;
+	      conn->iovs[conn->iov_end].iov_len  = 2;
+	      conn->iov_end += 1;
+	      conn->iovs[conn->iov_end].iov_base = ((char*)it)+2;
+	      conn->iovs[conn->iov_end].iov_len  = it->size+4;
+	      conn->iov_end += 1;
 
         //DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
         //DBG_READ print_buffer( it->data, it->size );
 
       } else {
 
-	conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
-	conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
-	conn->iov_end += 1;
+	      conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
+	      conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
+	      conn->iov_end += 1;
 
         settings.misses += 1;
         //DBG_READ printf("getkey - not found\n");
@@ -331,38 +338,27 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       if ( rc == 1 && it ) { // Found
 
-	      /*
-          if ( conn->getq_head ) conn_queue_item( conn, it, 1 );
-          else { 
+	      conn->iovs[conn->iov_end].iov_base = resp_get;
+	      conn->iovs[conn->iov_end].iov_len  = 2;
+	      conn->iov_end += 1;
 
-            unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
-            // Write cmd bytes or if that fails queue the item
-            if ( conn_write_command( conn ) ) {
-              // Decompress to a newly malloc'd buffer and flush chunks TODO
-              char *dbuf = malloc( decomp_sz+4 );
-              int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
-              uint32_t *p32 = (uint32_t*)(dbuf);
-              *p32 = decomp_size;
+        unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
+        // Decompress to a newly malloc'd buffer and flush chunks TODO
+        char *dbuf = malloc( decomp_sz+4 );
+        int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
+        uint32_t *p32 = (uint32_t*)(dbuf);
+        *p32 = decomp_size;
 
-              int n = conn_write_buffer( conn, dbuf, decomp_size+4 );
-              DBG_READ printf(" GET conn_write_buffer n %d\n", n);
-              if ( n ) conn_queue_buffer2( conn, dbuf, decomp_size+4, n ); // TODO If we Q up we need to free later
-              else     free(dbuf);
+	      conn->iovs[conn->iov_end].iov_base = dbuf;
+	      conn->iovs[conn->iov_end].iov_len  = decomp_size+4;
+	      conn->iov_end += 1;
 
-            } else {
-              conn_queue_item( conn, it, 1 );
-            }
-
-          }
-	  */
 
       } else {
 
-        //if ( conn->getq_head ) conn_queue_buffer( conn, resp_get_not_found, resp_get_not_found_len );
-        //else {
-          //int n =  conn_write_buffer( conn, resp_get_not_found,   resp_get_not_found_len );
-          //if ( n ) conn_queue_buffer( conn, resp_get_not_found+n, resp_get_not_found_len-n );
-        //}
+	      conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
+	      conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
+	      conn->iov_end += 1;
 
         settings.misses += 1;
         DBG_READ printf("getkey - not found\n");

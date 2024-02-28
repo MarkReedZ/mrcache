@@ -4,6 +4,9 @@ set:   [version] [cmd=2] [keylen] [valuelen] [key] [value]
 getz:  [version] [cmd=3] [keylen] [key]
 setz:  [version] [cmd=4] [keylen] [valuelen] [key] [value]
 
+Responses:
+get: [version] [rsp=1] [valuelen] [value]
+
 version is 1 byte 
 cmd is 1 byte
 keylen is 2 bytes so max 65,536

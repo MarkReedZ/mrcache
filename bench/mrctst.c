@@ -57,7 +57,7 @@ int on_data(void *conn, int fd, ssize_t nread, char *buf) {
   //printf("bytes: %d of %d\n", bytes, PIPE*14);
   //printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
   //if ( bytes >= PIPE*(22+vlen) ) {
-  if ( bytes >= PIPE*(4+vlen) ) {
+  if ( bytes >= PIPE*(6+vlen) ) {
     bytes = 0;
     reps += 1;
     //printf("rep %d\n", reps);
