@@ -3,6 +3,7 @@ bench/*
 !bench/*.c
 !bench/*.h
 !bench/bld
+!bench/py
 old
 old/*
 todo
