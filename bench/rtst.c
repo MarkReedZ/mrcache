@@ -6,9 +6,9 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
 #define NUM 10000
-#define PIPE 128
+#define PIPE 256
 static int bytes = 0;
-static struct iovec iovs[128];
+static struct iovec iovs[1024];
 static double start_time = 0;
 static int reps = 0;
 static int vlen = 16;

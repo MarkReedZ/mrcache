@@ -14,30 +14,17 @@
 #include "mrcache.h"
 #include "hashtable.h"
 #include "blocks.h"
-#include "city.h"
-
-//Debug
-static uint64_t bytes = 0;
-static uint64_t fbytes = 0;
+#include "wyhash.h"
+#include "xxhash.h"
 
 #define BUFFER_SIZE 32*1024
-
-// debug
-unsigned long nw = 0;
-unsigned long wsz = 0;
-unsigned long nr = 0;
-unsigned long rsz = 0;
-unsigned long tot = 0;
 
 static mr_loop_t *loop = NULL;
 struct settings settings;
 
-uint64_t mrq_disk_blocks[3];
-int      mrq_disk_reads;
-
 hashtable_t *mrq_ht, *mrq_htnew;
 
-#define NUM_IOVEC 256
+#define NUM_IOVEC 512
 typedef struct _conn
 {
   char *buf, *recv_buf;
@@ -62,11 +49,9 @@ struct sockaddr_in addr;
 static int num_writes = 0;
 //static int num_items = 0;
 
-//static char item_buf[1024] = {0,1};
-//static int item_len = 0;
 static char resp_get[2] = {0,1};
-static char resp_get_not_found[6] = {0,1,0,0,0,0};
-static char resp_get_not_found_len = 6;
+static char resp_get_not_found[4] = {0,0,0,0};
+static char resp_get_not_found_len = 4;
 
 uint64_t num_bits64 (uint64_t x) { return 64 - __builtin_clzll(x); }
 
@@ -78,6 +63,7 @@ static void setup() {
 
   srand((int)time(NULL));
 
+  // TODO Only malloc if compressed cmds are used
   zstd_buffer = malloc( 16 * 1024 * 1024 + 128 );
 
 }
@@ -89,7 +75,6 @@ static void tear_down() {
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
     printf( "%02x ",(int)b[z]);
-    //printf( "%c",b[z]);
   }
   printf("\n");
 }
@@ -114,6 +99,7 @@ void free_conn( my_conn_t *c ) {
   free(c);
 }
 
+// Append data to the connection buffer
 static void conn_append( my_conn_t* c, char *data, int len ) {
   DBG printf(" append cur %d \n", c->cur_sz);
 
@@ -154,7 +140,6 @@ void finishOnData( my_conn_t *conn ) {
     exit(1);
   }
   if ( conn->iov_end > conn->iov_start ) {
-    //printf("DELME writing %d items\n", conn->iov_end-conn->iov_start);
     mr_writevcb( loop, conn->fd, &(conn->iovs[conn->iov_start]), conn->iov_end-conn->iov_start , (void*)conn, on_write_done  );
     mr_flush(loop);
     conn->write_in_progress = 1;
@@ -177,12 +162,11 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
     free_conn(c);
     return 1;
   }
-  bytes += nread; 
 
   // If we have partial data for this connection
   if ( conn->cur_sz ) {
     conn_append( conn, buf, nread );
-    if ( conn->cur_sz >= conn->needs ) {
+    if ( conn->cur_sz >= conn->needs ) {  
       p = conn->buf;
       data_left = conn->cur_sz;
       conn->cur_sz = 0;
@@ -229,7 +213,9 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       }
 
       DBG_READ printf("get key %d >%.*s<\n", keylen, keylen, key );
-      unsigned long hv = CityHash64(key, keylen);      
+      unsigned long hv = wyhash(key, keylen, 0, _wyp);
+      //unsigned long hv = XXH3_64bits(key, keylen);
+
       item *it = NULL;
       int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
       DBG_READ printf("get ht_find rc %d\n", rc );
@@ -238,9 +224,6 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       if ( rc == 1 && it ) { // Found
 
-	      conn->iovs[conn->iov_end].iov_base = resp_get;
-	      conn->iovs[conn->iov_end].iov_len  = 2;
-	      conn->iov_end += 1;
 	      conn->iovs[conn->iov_end].iov_base = ((char*)it)+2;
 	      conn->iovs[conn->iov_end].iov_len  = it->size+4;
 	      conn->iov_end += 1;
@@ -271,8 +254,8 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
         return 0;
       }
       uint16_t keylen = *((uint16_t*)(p+2));
-      uint32_t vlen = *((uint32_t*)(p+4));
-      DBG printf("set keylen %d vlen %d\n", keylen, vlen );
+      int32_t vlen = *((int32_t*)(p+4));
+      DBG_SET printf("set keylen %d vlen %d\n", keylen, vlen );
 
       if ( data_left < 8+keylen+vlen ) {
         conn_append( conn, p, data_left );
@@ -282,30 +265,35 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       }
 
       char *key = p+8;
-      DBG printf("set key %d >%.*s<\n", keylen, keylen, key );
+      DBG_SET printf("set key %d >%.*s<\n", keylen, keylen, key );
       char *val = p+8+keylen;
-      DBG printf("set val %d >%.*s<\n", vlen, vlen, val );
-      DBG print_buffer( val, vlen );
+      DBG_SET printf("set val %d >%.*s<\n", vlen, vlen, val );
+      DBG_SET print_buffer( val, vlen );
 
       uint64_t blockAddr;
       item *it;
 
       settings.tot_writes += 1;
 
-        blockAddr = blocks_alloc( sizeof(item) + vlen + keylen );
-        it = blocks_translate( blockAddr );
-        DBG_SET printf(" set - it %p baddr %lx\n", it, blockAddr);
-        it->size = vlen;
-        memcpy( it->data, p+8+keylen, vlen ); // Val
+      blockAddr = blocks_alloc( sizeof(item) + vlen + keylen );
+      it = blocks_translate( blockAddr );
+      if ( it == NULL ) { // DELME
+        blocks_debug();
+      }
 
-        it->keysize = keylen;
-        memcpy( it->data+vlen, p+8, keylen ); // Key goes after val
+      DBG_SET printf(" set - it %p baddr %lx\n", it, blockAddr);
+      it->size = vlen;
+      memcpy( it->data, p+8+keylen, vlen ); // Val
 
-        data_left -= (8 + keylen + vlen);
-        p += 8 + keylen + vlen;
+      it->keysize = keylen;
+      memcpy( it->data+vlen, p+8, keylen ); // Key goes after val
 
-        unsigned long hv = CityHash64(key, keylen);      
-        ht_insert( mrq_ht, blockAddr, key, keylen, hv );
+      data_left -= (8 + keylen + vlen);
+      p += 8 + keylen + vlen;
+
+      unsigned long hv = wyhash(key, keylen, 0, _wyp);
+      //unsigned long hv = XXH3_64bits(key, keylen);
+      ht_insert( mrq_ht, blockAddr, key, keylen, hv );
 
       num_writes += 1;
 
@@ -329,7 +317,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       }
 
       DBG_READ printf("get key %d >%.*s<\n", keylen, keylen, key );
-      unsigned long hv = CityHash64(key, keylen);      
+      unsigned long hv = wyhash(key, keylen, 0, _wyp);
       item *it = NULL;
       int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
       DBG_READ printf("get ht_find rc %d\n", rc );
@@ -337,10 +325,6 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       settings.tot_reads += 1;
 
       if ( rc == 1 && it ) { // Found
-
-	      conn->iovs[conn->iov_end].iov_base = resp_get;
-	      conn->iovs[conn->iov_end].iov_len  = 2;
-	      conn->iov_end += 1;
 
         unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
         // Decompress to a newly malloc'd buffer and flush chunks TODO
@@ -419,7 +403,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
           data_left -= (8 + keylen + vlen);
           p += 8 + keylen + vlen;
 
-          unsigned long hv = CityHash64(key, keylen);      
+          unsigned long hv = wyhash(key, keylen, 0, _wyp);
           ht_insert( mrq_ht, blockAddr, key, keylen, hv );
 
         } 
@@ -551,7 +535,6 @@ int main (int argc, char **argv) {
   } else {
     printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, max_items );
   }
-  printf("DELME YAY\n");
   loop = mr_create_loop(sig_handler);
   settings.loop = loop;
   mr_tcp_server( loop, settings.port, setup_conn, on_data );

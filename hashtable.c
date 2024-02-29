@@ -2,7 +2,6 @@
 #include "hashtable.h"
 #include "mrcache.h"
 #include "blocks.h"
-#include "city.h"
 
 //static int num_lru_move = 0;
 
@@ -25,12 +24,15 @@ void ht_init(hashtable_t *ht, uint32_t sz) {
 // TODO
 //   Use if block_valid / block_mem 
 //   
+void ht_clear(hashtable_t *ht) {
+  memset( ht->tbl, 0, ht->index_size*sizeof(uint64_t));
+  ht->size = 0;
+}
 
 int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **outptr) {
 
   uint32_t hash = hv & ht->mask;
   DBG_SET printf("ht_find hash 0x%08x \n", hash );
-  bool disk = false;
 
   uint64_t blockAddress = ht->tbl[hash];
   int shift = 0;
@@ -50,35 +52,13 @@ int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **out
         *outptr = it;
         return 1;
       }
-    } else {
-      
-      // Disk or invalid
-      if ( blocks_is_disk(blockAddress) ) {
-
-        // Only read from disk if the key hash bits match
-        if ( (hash&0xFFFull) == GET_KEY(blockAddress) ) {
-
-          disk = true;
-          if ( mrq_disk_reads < 3 ) {
-            mrq_disk_blocks[mrq_disk_reads++] = blockAddress; // TODO test and number of disk blocks..
-          }
-
-        }
-
-      } else {
-
-        // We could remove the lru here and shift things left
-
-      }
     }
-
+     
     hash = (hash + 1) & ht->mask;
     blockAddress = ht->tbl[hash];
     
   }
 
-  if ( disk ) return 2;
-  
   return 0;
 
 }

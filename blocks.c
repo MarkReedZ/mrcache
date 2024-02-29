@@ -66,21 +66,35 @@ void blocks_init() {
     fsblock_min_block = min_block;
   }
 }
+void blocks_debug() {
+  printf("Base %p\n", base);
+  printf("cur  %p\n", cur);
+  printf("max  %p\n", base+ num_blocks*blocks_bytelen);
+  printf("min_block %d cur_block %d cur_block_sz %d\n", min_block, cur_block, cur_block_size);
+  printf("num blocks %d\n",num_blocks);
+  printf("blocks bytelen-1 %d\n",blocks_bytelen-1);
+}
 
 // Allocate memory of sz bytes 
 uint64_t blocks_alloc( int sz ) {
 
   // If the current block cannot hold the new item 
   if ( (cur_block_size+sz) > ((blocks_bytelen)-1) ) { // TODO make this a constant.  No variable block size
+    //printf("DELME WTF cur %d sz %d\n", cur_block_size, sz);
+    //printf("DELME items in blk 0 %d\n", items_in_block[ 0 ]);
+    //printf("DELME items in blk 1 %d\n", items_in_block[ 1 ]);
 
-    if ( full ) blocks_lru();
-    else if ( cur_block == num_blocks-1 ) full = true; // Full is set once ever
+    if ( cur_block >= num_blocks ) {
+      blocks_lru();
+      full = true; // Full is set once ever
+    }
 
+    //printf("DELME cur_block %d\n", cur_block);
     cur_block += 1;
-    items_in_block[ cur_block%num_blocks ] = 0;
+    //items_in_block[ cur_block%num_blocks ] = 0;
     cur = base + ((cur_block%num_blocks)<<blocks_bitlen);
     cur_block_size = 0;
-
+    //blocks_debug();
   }
 
   cur += sz;
@@ -93,6 +107,9 @@ uint64_t blocks_alloc( int sz ) {
 void blocks_lru() {
   int i = min_block%num_blocks;
   int n = items_in_block[ i ];
+  //printf("DELME blocks_lru\n");
+  //printf("DELME items in blk 0 %d\n", items_in_block[ 0 ]);
+  //printf("DELME items in blk 1 %d\n", items_in_block[ 1 ]);
 
   if ( settings.disk_size ) { 
     blocks_fs_write(i);
@@ -100,10 +117,11 @@ void blocks_lru() {
     fsblock_min_block = min_block+1;
   }
 
+  //printf("DELME LRU %d items min block %d\n",n, min_block);
   ht_decrement(mrq_ht, n); // Tell the hashtable how many items were dropped TODO what about items on disk?
   items_in_block[ i ] = 0;
   min_block += 1;  // Items dropped are still in the hashtable. Min block tells us if they are still valid in memory or not
-  
+  //blocks_debug(); // DELME  
 }
 
 void *blocks_translate( uint64_t blockAddr ) {

@@ -6,9 +6,9 @@ static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
 #define NUM 10000
-#define PIPE 128
+#define PIPE 256
 static int bytes = 0;
-static struct iovec iovs[128];
+static struct iovec iovs[1024];
 static double start_time = 0;
 static int reps = 0;
 //static int vlen = 10000;
@@ -57,7 +57,7 @@ int on_data(void *conn, int fd, ssize_t nread, char *buf) {
   //printf("bytes: %d of %d\n", bytes, PIPE*14);
   //printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
   //if ( bytes >= PIPE*(22+vlen) ) {
-  if ( bytes >= PIPE*(6+vlen) ) {
+  if ( bytes >= PIPE*(4+vlen) ) {
     bytes = 0;
     reps += 1;
     //printf("rep %d\n", reps);
@@ -106,6 +106,7 @@ int main() {
 
   char buf[256], *p;
   char *key = "test";
+  //char *key = "testtesttesttest";
   struct iovec iov;
 
   p = buf;

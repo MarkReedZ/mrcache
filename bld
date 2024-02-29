@@ -1,28 +1,15 @@
-#gcc -c mrq.c -o mrq.o -g -fsanitize=address
-#gcc mrq.o ae/libae.a -o mrq -g -fsanitize=address
+
 #CFLAGS='-Wall -O0 -g -fsanitize=address -fno-omit-frame-pointer -fsanitize-recover=address'
 #CFLAGS='-Wall -O0 -g'
 #CFLAGS='-g'
 CFLAGS='-O3'
-gcc -c mrcache.c -o mrcache.o ${CFLAGS}
-#gcc -c mrcache_ae.c -o mrcache_ae.o ${CFLAGS}
+gcc -c mrcache.c -o mrcache.o ${CFLAGS} -DXXH_INLINE_ALL
 gcc -c hashtable.c -o hashtable.o ${CFLAGS}
 gcc -c blocks.c -o blocks.o ${CFLAGS}
-gcc -c city.c -o city.o ${CFLAGS}
-gcc mrcache.o hashtable.o city.o blocks.o -lmrloop -luring -lzstd -o mrcache ${CFLAGS}
+gcc mrcache.o hashtable.o blocks.o -lmrloop -luring -lzstd -o mrcache ${CFLAGS}
 rm *.o
 
-# Need to split out the fs blocks from blocks.c to build _ae again
-#gcc mrcache_ae.o hashtable.o city.o blocks.o ae/libae.a -lzstd -o mrcache_ae ${CFLAGS}
 
-#gcc -c mrq.c -o mrq.o ${CFLAGS}
-#gcc mrq.o hashtable.o city.o blocks.o ae/libae.a -Llib -lmrloop -luring -lzstd -o mrq ${CFLAGS}
-# gcc tst.c mrloop.o -L. -luring -o tst ${CFLAGS}
 
-#  ASAN_OPTIONS=halt_on_error=0 LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/7/libasan.so ./mrcache -m 2 -i 1
+#  ASAN_OPTIONS=halt_on_error=0 LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/7/libasan.so ./mrcache -m 20 -i 16
 
-#
-#gcc -DHAVE_CONFIG_H -I.  -DNDEBUG   -g -O2 -pthread -pthread -Wall -Werror -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -MT memcached-cache.o -MD -MP -MF .deps/memcached-cache.Tpo -c -o memcached-cache.o `test -f 'cache.c' || echo './'`cache.c
-#mv -f .deps/memcached-cache.Tpo .deps/memcached-cache.Po
-#gcc  -g -O2 -pthread -pthread -Wall -Werror -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls   -o memcached memcached-memcached.o memcached-hash.o memcached-jenkins_hash.o memcached-murmur3_hash.o memcached-slabs.o memcached-items.o memcached-assoc.o memcached-thread.o memcached-daemon.o memcached-stats.o memcached-util.o memcached-bipbuffer.o memcached-logger.o memcached-crawler.o memcached-itoa_ljust.o memcached-slab_automove.o memcached-authfile.o memcached-restart.o memcached-cache.o          -levent 
-#

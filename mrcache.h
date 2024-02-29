@@ -17,7 +17,7 @@ typedef struct _conn my_conn_t;
 
 typedef struct __attribute__((__packed__)) _item {
   uint16_t keysize;
-  uint32_t size;
+  int32_t size;
   char data[];
 } item;
 

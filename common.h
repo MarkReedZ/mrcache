@@ -20,8 +20,6 @@ typedef struct hashtable hashtable_t;
 
 // globals
 extern hashtable_t *mrq_ht;
-extern uint64_t mrq_disk_blocks[3];
-extern int mrq_disk_reads;
 
 struct settings {
   int port;
