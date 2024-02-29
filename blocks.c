@@ -73,14 +73,15 @@ uint64_t blocks_alloc( int sz ) {
   // If the current block cannot hold the new item 
   if ( (cur_block_size+sz) > ((blocks_bytelen)-1) ) { // TODO make this a constant.  No variable block size
 
-    if ( full ) blocks_lru();
-    else if ( cur_block == num_blocks-1 ) full = true; // Full is set once ever
+    if ( cur_block >= num_blocks ) {
+      blocks_lru();
+      full = true; // Full is set once ever
+    }
 
     cur_block += 1;
-    items_in_block[ cur_block%num_blocks ] = 0;
+    //items_in_block[ cur_block%num_blocks ] = 0;
     cur = base + ((cur_block%num_blocks)<<blocks_bitlen);
     cur_block_size = 0;
-
   }
 
   cur += sz;
@@ -103,7 +104,6 @@ void blocks_lru() {
   ht_decrement(mrq_ht, n); // Tell the hashtable how many items were dropped TODO what about items on disk?
   items_in_block[ i ] = 0;
   min_block += 1;  // Items dropped are still in the hashtable. Min block tells us if they are still valid in memory or not
-  
 }
 
 void *blocks_translate( uint64_t blockAddr ) {
@@ -161,7 +161,7 @@ bool blocks_is_lru( uint64_t blockAddr ) {
   return false;
 }
 
-void blocks_on_write_done( void *iov ) {
+void blocks_on_write_done( void *iov, int res ) {
   free(((struct iovec*)iov)->iov_base);
   free(iov);
 }
@@ -192,12 +192,12 @@ void blocks_fs_write( int blk ) {
 
 }
 
-void blocks_on_read_done( void *ptr ) {
+void blocks_on_read_done( void *ptr, int res ) {
 
-  disk_item_t *di = (disk_item_t*)ptr;
-  getq_item_t *qi = di->qi;
-  qi->reads_done += 1;
-  conn_process_queue( di->conn );
+  //disk_item_t *di = (disk_item_t*)ptr;
+  //getq_item_t *qi = di->qi;
+  //qi->reads_done += 1;
+  //conn_process_queue( di->conn );
 
   //free(((struct iovec*)iov)->iov_base);
   //free(iov);

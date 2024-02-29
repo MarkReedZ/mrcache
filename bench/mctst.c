@@ -5,13 +5,13 @@
 static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
-#define NUM 1000
-#define PIPE 10
+#define NUM 10000
+#define PIPE 32
 static int bytes = 0;
-static struct iovec iovs[128];
+static struct iovec iovs[512];
 static double start_time = 0;
 static int reps = 0;
-static int vlen = 10;
+static int vlen = 10000;
 static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {
@@ -20,10 +20,6 @@ static void print_buffer( char* b, int len ) {
     //printf( "%c",b[z]);
   }
   printf("\n");
-}
-
-void on_write_done(void *user_data) {
-  printf("on_write_done - %ld\n", (unsigned long)user_data);
 }
 
 typedef struct _conn
@@ -54,8 +50,7 @@ int on_data(void *conn, int fd, ssize_t nread, char *buf) {
   bytes += nread;
   //printf("bytes: %d of %d\n", bytes, PIPE*36);
   //printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
-  //if ( bytes >= PIPE*(22+vlen) ) {
-  if ( bytes >= PIPE*36 ) {
+  if ( bytes >= PIPE*(26+vlen) ) {
     bytes = 0;
     reps += 1;
     //printf("rep %d\n", reps);
@@ -125,7 +120,6 @@ int main() {
   start_time = clock();
   gettimeofday(&tv1, NULL);
   mr_writev( loop, fd, iovs, PIPE );
-  //mr_writevcb( loop, fd, iovs, PIPE, (void*)reps, on_write_done  );
   mr_flush(loop);
 
 

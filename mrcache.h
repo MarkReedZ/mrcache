@@ -17,7 +17,7 @@ typedef struct _conn my_conn_t;
 
 typedef struct __attribute__((__packed__)) _item {
   uint16_t keysize;
-  uint32_t size;
+  int32_t size;
   char data[];
 } item;
 
@@ -44,7 +44,5 @@ typedef struct _getq_item_t {
 } getq_item_t;
 
 
-void can_write( void *conn, int fd );
-void conn_process_queue( my_conn_t *conn );
 
 

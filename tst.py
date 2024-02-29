@@ -13,11 +13,16 @@ def lcb(client):
 
 async def run(loop):
 
-  rc = await asyncmrcache.create_client( "localhost", loop, lost_cb=lcb)
+  rc = await asyncmrcache.create_client( [("localhost",7000)], loop, lost_cb=lcb)
 
-  k = b"test"
-  v = b"testtest"
-  await rc.set(k,v)
+  if 1:
+    k = b"test" 
+    v = b"test" * 25 * 100
+    #v = b"test" * 4
+    await rc.setz(k,v)
+    print(await rc.getz(k))
+
+  print(await rc.get(b'test1999900'))
 
   await rc.close()
 

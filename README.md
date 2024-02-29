@@ -1,22 +1,22 @@
 # Mrcache
 
-Mrcache is a key value store with support for compression and disk.  Mrcache focuses on speed and limiting overhead to <20B per item which results in several limitations: the max size for a key is 32kb and value is 2mb.  It also requires linux kernel 5.4+ as it uses io_uring which is 2-4x faster than epoll. 
+Mrcache is a key value cache with support for compression.  Mrcache focuses on speed and limiting overhead to <20B per item which results in several limitations: the max size for a key is 32kb and value is 16mb.  It also requires linux kernel 5.4+ as it uses io_uring which is 2-4x faster than epoll. 
 
 # Benchmarks
 
 ```
 GET - 16B ops/sec
 
-  mrcache        1.07m 
-  redis           270k
-  memcached       100k
+  mrcache        9.8m 
+  redis          2.7m
+  memcached      400k
 
 GET - 10kb ops/sec
 
-  mrcache        179k
-  mrcache (zstd)  79k
-  memcached       24k
-  redis           32k
+  mrcache         979k
+  mrcache (zstd)  212k
+  memcached       261k
+  redis           313k
 
 ```
 
@@ -25,6 +25,7 @@ GET - 10kb ops/sec
 * Linux kernel version 5.5+
 * https://github.com/MarkReedZ/mrloop - io_uring based C event loop
 * [Python asyncio client](https://github.com/MarkReedZ/asyncmrcache)
+* [zstd compression](https://github.com/facebook/zstd)
 
 
 # Usage
