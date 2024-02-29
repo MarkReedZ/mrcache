@@ -116,7 +116,7 @@ static void conn_append( my_conn_t* c, char *data, int len ) {
 }
 
 void on_write_done(void *user_data, int res) {
-  //printf("on_write_done - res %d conn %p\n", res, user_data);
+  DBG printf("on_write_done - res %d conn %p\n", res, user_data);
 
   if ( res < 0 ) {
     printf(" err: %s\n",strerror(-res));
@@ -277,9 +277,6 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       blockAddr = blocks_alloc( sizeof(item) + vlen + keylen );
       it = blocks_translate( blockAddr );
-      if ( it == NULL ) { // DELME
-        blocks_debug();
-      }
 
       DBG_SET printf(" set - it %p baddr %lx\n", it, blockAddr);
       it->size = vlen;
@@ -335,6 +332,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
 	      conn->iovs[conn->iov_end].iov_base = dbuf;
 	      conn->iovs[conn->iov_end].iov_len  = decomp_size+4;
+	      conn->free_me[conn->iov_end] = 1;
 	      conn->iov_end += 1;
 
 
@@ -382,31 +380,31 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       settings.tot_writes += 1;
 
-        int cmplen = ZSTD_compress( zstd_buffer, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
+      int cmplen = ZSTD_compress( zstd_buffer, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
 
-        //if ( ZSTD_isError(rc) ) {
-          //const char *err = ZSTD_getErrorName(rc);
-          //printf("TODO zstd error %s\n", err );
-          //exit(1);
-        //}
+      //if ( ZSTD_isError(rc) ) {
+        //const char *err = ZSTD_getErrorName(rc);
+        //printf("TODO zstd error %s\n", err );
+        //exit(1);
+      //}
 
-        // If successful store it otherwise ignore this cmd
-        if ( cmplen > 0 ) {
+      // If successful store it otherwise ignore this cmd
+      if ( cmplen > 0 ) {
 
-          blockAddr = blocks_alloc( sizeof(item) + cmplen + keylen );
-          it = blocks_translate( blockAddr );
-          it->keysize = keylen;
-          it->size = cmplen;
-          memcpy( it->data, zstd_buffer, cmplen ); // Copy in the compressed value
-          memcpy( it->data+cmplen, p+8, keylen ); // Key goes after val
+        blockAddr = blocks_alloc( sizeof(item) + cmplen + keylen );
+        it = blocks_translate( blockAddr );
+        it->keysize = keylen;
+        it->size = cmplen;
+        memcpy( it->data, zstd_buffer, cmplen ); // Copy in the compressed value
+        memcpy( it->data+cmplen, p+8, keylen ); // Key goes after val
 
-          data_left -= (8 + keylen + vlen);
-          p += 8 + keylen + vlen;
+        data_left -= (8 + keylen + vlen);
+        p += 8 + keylen + vlen;
 
-          unsigned long hv = wyhash(key, keylen, 0, _wyp);
-          ht_insert( mrq_ht, blockAddr, key, keylen, hv );
+        unsigned long hv = wyhash(key, keylen, 0, _wyp);
+        ht_insert( mrq_ht, blockAddr, key, keylen, hv );
 
-        } 
+      } 
 
       num_writes += 1;
 

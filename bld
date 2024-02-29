@@ -3,12 +3,14 @@
 #CFLAGS='-Wall -O0 -g'
 #CFLAGS='-g'
 CFLAGS='-O3'
-gcc -c mrcache.c -o mrcache.o ${CFLAGS} -DXXH_INLINE_ALL
+gcc -c mrcache.c -o mrcache.o ${CFLAGS} 
 gcc -c hashtable.c -o hashtable.o ${CFLAGS}
 gcc -c blocks.c -o blocks.o ${CFLAGS}
 gcc mrcache.o hashtable.o blocks.o -lmrloop -luring -lzstd -o mrcache ${CFLAGS}
 rm *.o
 
+# For xxhash with xxhash.h
+#gcc -c mrcache.c -o mrcache.o ${CFLAGS} -DXXH_INLINE_ALL
 
 
 #  ASAN_OPTIONS=halt_on_error=0 LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/7/libasan.so ./mrcache -m 20 -i 16

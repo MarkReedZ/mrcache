@@ -11,8 +11,7 @@ static int bytes = 0;
 static struct iovec iovs[1024];
 static double start_time = 0;
 static int reps = 0;
-//static int vlen = 10000;
-static int vlen = 16;
+static int vlen = 10000;
 static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {
@@ -107,11 +106,12 @@ int main() {
   char buf[256], *p;
   char *key = "test";
   //char *key = "testtesttesttest";
+  //char *key = "test1999900";
   struct iovec iov;
 
   p = buf;
   int kl = strlen(key);
-  p[0] = 0; p[1] = 1;
+  p[0] = 0; p[1] = 3; // 1 is GET and 3 is GETZ
   uint16_t *keylen = (uint16_t*)(p+2);
   *keylen = kl;
   strcpy( p + 4, key );
