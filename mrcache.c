@@ -380,7 +380,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
       settings.tot_writes += 1;
 
-      int cmplen = ZSTD_compress( zstd_buffer, vlen+64, p+8+keylen, vlen, 3 ); // instead of 64 use ZSTD_COMPRESSBOUND?
+      int cmplen = ZSTD_compress( zstd_buffer, vlen+64, p+8+keylen, vlen, 2 ); // instead of 64 use ZSTD_COMPRESSBOUND?
 
       //if ( ZSTD_isError(rc) ) {
         //const char *err = ZSTD_getErrorName(rc);
