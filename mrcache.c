@@ -474,7 +474,7 @@ int main (int argc, char **argv) {
   };
 
   settings.port = 7000;
-  settings.max_memory = 512;
+  settings.max_memory = 128;
   settings.flags = 0;
   settings.disk_size = 0;
   settings.index_size = 0;
