@@ -2,6 +2,10 @@
 #include "mrloop.h"
 
 #include <sys/time.h>
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+
 static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
@@ -13,6 +17,8 @@ static double start_time = 0;
 static int reps = 0;
 static int vlen = 100000;
 static int wcnt = 0;
+static char keys[8196][2048];
+static char vals[8196][8196];
 
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
@@ -20,6 +26,10 @@ static void print_buffer( char* b, int len ) {
     //printf( "%c",b[z]);
   }
   printf("\n");
+}
+
+void on_write_done(void *user_data) {
+  printf("on_write_done - %ld\n", (unsigned long)user_data);
 }
 
 typedef struct _conn
@@ -36,7 +46,7 @@ void on_timer() {
 
 void *setup_conn(int fd, char **buf, int *buflen ) {
   //printf("New Connection\n");
-  conn_t *conn = calloc( 1, sizeof(conn_t) );
+  conn_t *conn = (conn_t*)calloc( 1, sizeof(conn_t) );
   conn->fd = fd;
   *buf = conn->buf;
   *buflen = BUFSIZE;
@@ -46,23 +56,38 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
 int on_data(void *conn, int fd, ssize_t nread, char *buf) {
   //printf("on_data >%.*s<\n", 8, buf+28);
   //print_buffer(buf, nread); 
-  //printf("nread=%d\n",nread);
   //exit(-1);
   bytes += nread;
-  if ( bytes >= PIPE*(6+vlen) ) {
+  //printf("nread %d\n", nread);
+  //printf("bytes: %d of %d\n", bytes, PIPE*14);
+  //printf("bytes: %d of %d", bytes, PIPE*(22+vlen));
+  //if ( bytes >= PIPE*(22+vlen) ) {
+  if ( bytes >= PIPE*(4+vlen) ) {
     bytes = 0;
     reps += 1;
+    //printf("rep %d\n", reps);
     if ( reps < NUM ) {
+      //mr_writev( loop, fd, iovs, PIPE );
+      //for( int i = 0; i < 100; i++ ) {
       mr_writev( loop, fd, iovs, PIPE );
+      //mr_writevcb( loop, fd, iovs, PIPE, (void*)reps, on_write_done  );
+      //printf("Writing again\n");
       mr_flush(loop);
+      //}
     } else {
       gettimeofday(&tv2, NULL);
       double secs = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
       printf ("Total time = %f seconds cps %f\n", (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec), (PIPE*reps)/secs);
       exit(1);
+    //double taken = ((double)(clock()-start_time))/CLOCKS_PER_SEC;
+    //printf( " %d gets time taken %f cps %f \n ", NUM*100, taken, (NUM*128)/taken );
     }
   }
 
+  //struct iovec *iov = malloc( sizeof(struct iovec) );
+  //iov->iov_base = buf;
+  //iov->iov_len  = nread;
+  //mrWritev( loop, ((conn_t*)conn)->fd, iov, 1 );
   return 0;
 }
 
@@ -75,25 +100,36 @@ void sig_handler(const int sig) {
 
 int main() {
 
+  //fork();
+  //fork();
+
   signal(SIGINT, sig_handler);
   signal(SIGTERM, sig_handler);
   
   loop = mr_create_loop(sig_handler);
-  int fd = mr_connect(loop,"localhost", 6379, on_data);
+  int fd = mr_connect(loop,"localhost", 7000, on_data);
 
   char buf[256], *p;
+  const char *key = "test";
+  //char *key = "testtesttesttest";
+  //char *key = "test1999900";
   struct iovec iov;
 
-  memset(buf, 0, 256);
-  strcpy(buf, "*2\r\n$3\r\nGET\r\n$4\r\ntest\r\n");
+  p = buf;
+  int kl = strlen(key);
+  p[0] = 0; p[1] = 1; // 1 is GET and 3 is GETZ
+  uint16_t *keylen = (uint16_t*)(p+2);
+  *keylen = kl;
+  strcpy( p + 4, key );
 
   for( int i = 0; i < PIPE; i++ ) {
     iovs[i].iov_base = buf;
-    iovs[i].iov_len = strlen(buf);
+    iovs[i].iov_len = 4+kl;
   }
   start_time = clock();
   gettimeofday(&tv1, NULL);
   mr_writev( loop, fd, iovs, PIPE );
+  //mr_writevcb( loop, fd, iovs, PIPE, (void*)reps, on_write_done  );
   mr_flush(loop);
 
 

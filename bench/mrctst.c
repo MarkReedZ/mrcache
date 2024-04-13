@@ -5,13 +5,13 @@
 static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
-#define NUM 10000
-#define PIPE 256
+#define NUM 1000
+#define PIPE 128
 static int bytes = 0;
 static struct iovec iovs[1024];
 static double start_time = 0;
 static int reps = 0;
-static int vlen = 10000;
+static int vlen = 100000;
 static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {
@@ -111,7 +111,7 @@ int main() {
 
   p = buf;
   int kl = strlen(key);
-  p[0] = 0; p[1] = 3; // 1 is GET and 3 is GETZ
+  p[0] = 0; p[1] = 1; // 1 is GET and 3 is GETZ
   uint16_t *keylen = (uint16_t*)(p+2);
   *keylen = kl;
   strcpy( p + 4, key );

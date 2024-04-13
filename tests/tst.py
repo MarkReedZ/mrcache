@@ -13,17 +13,38 @@ def lcb(client):
 
 async def run(loop):
 
-  rc = await asyncmrcache.create_client( "localhost", loop, lost_cb=lcb)
+  rc = await asyncmrcache.create_client( [("localhost",7000)], loop, lost_cb=lcb)
 
-  v = b"value" * 20
-  if 1:
-    for x in range(10):
-      k = bytes("test" + str(x), "utf-8")
-      await rc.set(k,v)
+  num = 99000
+  v = b"v" * 1000
+  l = []
+  l.append( b"0" * 1000 )
+  l.append( b"1" * 1000 )
+  l.append( b"2" * 1000 )
+  l.append( b"3" * 1000 )
+  l.append( b"4" * 1000 )
+  l.append( b"5" * 1000 )
+  l.append( b"6" * 1000 )
+  l.append( b"7" * 1000 )
+  for x in range(num):
+    k = bytes("test" + str(x), "utf-8")
+    await rc.set(k,l[x%8])
 
-  act = await rc.get(b"test2")
-  if v != act:
-    print( "Act >" + str(act) + "< != >" + str(v) + "<" )
+  hit = 0
+  for x in range(num):
+    k = bytes("test" + str(x), "utf-8")
+    v = await rc.get(k)
+    if v != None:
+      if v != l[x%8]:
+        print( "ERROR", k)
+      hit += 1
+
+  print("Hit =",hit)
+  rc.stat()
+
+  #act = await rc.get(b"test2")
+  #if v != act:
+    #print( "Act >" + str(act) + "< != >" + str(v) + "<" )
 
   await rc.close()
 

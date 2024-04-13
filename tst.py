@@ -15,15 +15,17 @@ async def run(loop):
 
   rc = await asyncmrcache.create_client( [("localhost",7000)], loop, lost_cb=lcb)
 
-  if 0:
+  if 1:
     k = b"test" 
-    v = b"test" * 25 * 100
-    #v = b"test" * 4
-    await rc.setz(k,v)
-    print(await rc.getz(k))
+    v = b"t" * 100000
+    await rc.set(k,v)
+    print(await rc.get(k))
 
-  rc.stat()
-  print(await rc.get(b'test1999900'))
+  #print(  await rc.get(b"test") )
+  #print(  await rc.get(b"test") )
+
+  #//rc.stat()
+  #//print(await rc.get(b'test1999900'))
 
   await rc.close()
 

@@ -5,13 +5,13 @@
 static struct timeval  tv1, tv2;
 
 #define BUFSIZE 64*1024
-#define NUM 1000
-#define PIPE 128
+#define NUM 10000
+#define PIPE 256
 static int bytes = 0;
 static struct iovec iovs[1024];
 static double start_time = 0;
 static int reps = 0;
-static int vlen = 100000;
+static int vlen = 1000;
 static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {
@@ -44,12 +44,12 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
 }
 
 int on_data(void *conn, int fd, ssize_t nread, char *buf) {
-  //printf("on_data >%.*s<\n", 8, buf+28);
+  //printf("on_data >%.*s<\n", 16, buf);
   //print_buffer(buf, nread); 
   //printf("nread=%d\n",nread);
   //exit(-1);
   bytes += nread;
-  if ( bytes >= PIPE*(6+vlen) ) {
+  if ( bytes >= PIPE*(5) ) {  // +OK\r\n
     bytes = 0;
     reps += 1;
     if ( reps < NUM ) {
@@ -81,11 +81,13 @@ int main() {
   loop = mr_create_loop(sig_handler);
   int fd = mr_connect(loop,"localhost", 6379, on_data);
 
-  char buf[256], *p;
+  char buf[2048], *p;
   struct iovec iov;
 
-  memset(buf, 0, 256);
-  strcpy(buf, "*2\r\n$3\r\nGET\r\n$4\r\ntest\r\n");
+  memset(buf, 0, 2048);
+  //strcpy(buf, "*2\r\n$3\r\nGET\r\n$4\r\ntest\r\n");
+  //strcpy(buf, "*3\r\n$3\r\nSET\r\n$4\r\ntest\r\n$4\r\nTEST\r\n");
+  strcpy(buf, "*3\r\n$3\r\nSET\r\n$4\r\ntest\r\n$1000\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n");
 
   for( int i = 0; i < PIPE; i++ ) {
     iovs[i].iov_base = buf;

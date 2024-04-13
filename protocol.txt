@@ -12,6 +12,6 @@ errors: [errcode]
 version is 1 byte 
 cmd is 1 byte
 keylen is 2 bytes so max 65,536
-valuelen is signed 4 bytes so max 2b
+valuelen is 4 bytes 
 errcode is signed 4 bytes and negative
 
