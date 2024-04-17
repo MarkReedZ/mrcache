@@ -444,7 +444,7 @@ static void usage(void) {
           "    -h, --help                    This help\n"
           "    -p, --port=<num>              TCP port to listen on (default: 7000)\n"
           "    -m, --max-memory=<mb>         Maximum amount of memory in mb (default: 256)\n"
-          "    -d, --max-disk=<gb>           Maximum amount of disk in gb (default: 1)\n"
+          //"    -d, --max-disk=<gb>           Maximum amount of disk in gb (default: 1)\n"
           "    -i, --index-size=<mb>         Index size in mb (must be a power of 2 and sz/14 is the max number of items)\n"
           "\n"
         );
@@ -459,14 +459,14 @@ int main (int argc, char **argv) {
   char *shortopts =
     "h"
     "m:"
-    "d:"
+    //"d:"
     "i:"
     "p:"
     ;
   const struct option longopts[] = {
     {"help",             no_argument, 0, 'h'},
     {"max-memory", required_argument, 0, 'm'},
-    {"max-disk",   required_argument, 0, 'd'},
+    //{"max-disk",   required_argument, 0, 'd'},
     {"index-size", required_argument, 0, 'i'},
     {"port",       required_argument, 0, 'p'},
     {"zstd",             no_argument, 0, 'z'},
@@ -476,7 +476,7 @@ int main (int argc, char **argv) {
   settings.port = 7000;
   settings.max_memory = 128;
   settings.flags = 0;
-  settings.disk_size = 0;
+  //settings.disk_size = 0;
   settings.index_size = 0;
   settings.block_size = 16;
 
@@ -494,9 +494,9 @@ int main (int argc, char **argv) {
     case 'm':
       settings.max_memory = atoi(optarg);
       break;
-    case 'd':
-      settings.disk_size = atoi(optarg);
-      break;
+    //case 'd':
+      //settings.disk_size = atoi(optarg);
+      //break;
     case 'i':
       settings.index_size = atoi(optarg);
       break;
@@ -528,11 +528,11 @@ int main (int argc, char **argv) {
   setup();
 
   double max_items = (double)(settings.index_size>>3)*0.70; // Each entry is 8B max 70% full
-  if ( settings.disk_size ) {
-    printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", settings.port, settings.max_memory, settings.disk_size, max_items, settings.index_size );
-  } else {
+  //if ( settings.disk_size ) {
+    //printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", settings.port, settings.max_memory, settings.disk_size, max_items, settings.index_size );
+  //} else {
     printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, max_items );
-  }
+  //}
   loop = mr_create_loop(sig_handler);
   settings.loop = loop;
   mr_tcp_server( loop, settings.port, setup_conn, on_data );
