@@ -4,6 +4,16 @@ bench/*
 !bench/*.h
 !bench/bld
 !bench/py
+!bench/README.md
+tests/*
+!tests/*.c
+!tests/*.cpp
+!tests/*.h
+!tests/*.py
+!tests/bld
+!tests/disk
+!tests/README.md
+tests/disk/tst
 old
 old/*
 todo

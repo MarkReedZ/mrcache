@@ -6,19 +6,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "rand_utils.h"
+
 static struct timeval  tv1, tv2;
 
-#define BUFSIZE 64*1024
-#define NUM 1000
 #define PIPE 128
-static int bytes = 0;
-static struct iovec iovs[1024];
+static struct iovec iovs[PIPE];
 static double start_time = 0;
-static int reps = 0;
-static int vlen = 100000;
-static int wcnt = 0;
-static char keys[8196][2048];
-static char vals[8196][8196];
+static const int nkeys = 8196;
+static char getbufs[nkeys][2048];
+static char setbufs[nkeys][8196];
+static int glens[nkeys];
+static int slens[nkeys];
+static int next = 0;
+static std::unordered_map<int, std::string> indexValMap;
+static std::deque<int> expectIndices;
 
 static void print_buffer( char* b, int len ) {
   for ( int z = 0; z < len; z++ ) {
@@ -51,6 +53,21 @@ void *setup_conn(int fd, char **buf, int *buflen ) {
   *buf = conn->buf;
   *buflen = BUFSIZE;
   return conn;
+}
+
+void fillIovs() {
+  for( int i = 0; i < PIPE; i++ ) {
+
+    if ( (rand_utils.rand64() & 1) && i != 2 ) { // != 2 so we always do 1 get
+      iovs[next].iov_base = setbufs[next];
+      iovs[next].iov_len  = slens[next];
+    } else {
+      iovs[next].iov_base = getbufs[next];
+      iovs[next].iov_len  = glens[next];
+      expectIndices.push_back(next); 
+    }
+    next += 1; if ( next >= nkeys ) next = 0;
+  }
 }
 
 int on_data(void *conn, int fd, ssize_t nread, char *buf) {
@@ -109,23 +126,29 @@ int main() {
   loop = mr_create_loop(sig_handler);
   int fd = mr_connect(loop,"localhost", 7000, on_data);
 
-  char buf[256], *p;
-  const char *key = "test";
-  //char *key = "testtesttesttest";
-  //char *key = "test1999900";
-  struct iovec iov;
+  
 
-  p = buf;
-  int kl = strlen(key);
-  p[0] = 0; p[1] = 1; // 1 is GET and 3 is GETZ
-  uint16_t *keylen = (uint16_t*)(p+2);
-  *keylen = kl;
-  strcpy( p + 4, key );
+  for ( int i = 0; i < nkeys; i++ ) {
+    rand_utils::rand_bytes( buf, kl );
+    char *p = getbufs[i];
+    uint64_t kl = rand_utils::rand64() & 0x3FF;
+    p[0] = 0; p[1] = 1; uint16_t *keylen = (uint16_t*)(p+2); *keylen = kl;
+    rand_utils::rand_bytes( p+4, kl );
+    glens[i] = kl + 4;
 
-  for( int i = 0; i < PIPE; i++ ) {
-    iovs[i].iov_base = buf;
-    iovs[i].iov_len = 4+kl;
+    uint64_t l = rand_utils::rand64() & 0xFFF;
+    p = setbufs[i];
+    p[0] = 0; p[1] = 2; 
+    keylen = (uint16_t*)(p+2); *keylen = kl;
+    uint32_t *vlen = (uint16_t*)(p+4); *vlen = l;
+    strncpy( p+8, getbufs[i]+4, kl );
+    rand_utils::rand_bytes( p+8+kl, l );
+    slens[i] = l + kl + 8;
+    indexValMap[ i ] = std_string( p+8+kl, l );
   }
+
+  fillIovs();
+
   start_time = clock();
   gettimeofday(&tv1, NULL);
   mr_writev( loop, fd, iovs, PIPE );

@@ -15,6 +15,10 @@ async def run(loop):
 
   rc = await asyncmrcache.create_client( [("localhost",7000)], loop, lost_cb=lcb)
 
+  await rc.set(b"test", b"a"*512)
+  await rc.getz(b"test")
+  exit()
+
   num = 99000
   v = b"v" * 1000
   l = []

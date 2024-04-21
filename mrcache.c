@@ -324,7 +324,12 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       if ( rc == 1 && it ) { // Found
 
         unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
-        // Decompress to a newly malloc'd buffer and flush chunks TODO
+        if ( decomp_sz < 0 ) {  // This data wasn't compressed.  Return not found.
+	        conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
+	        conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
+	        conn->iov_end += 1;
+        }
+
         char *dbuf = malloc( decomp_sz+4 );
         int decomp_size = ZSTD_decompress( dbuf+4, decomp_sz, it->data, it->size );
         uint32_t *p32 = (uint32_t*)(dbuf);

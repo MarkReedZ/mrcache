@@ -2,4 +2,4 @@
 #CFLAGS='-Wall -O0 -g -fsanitize=address -fno-omit-frame-pointer -fsanitize-recover=address'
 CFLAGS='-O3'
 
-g++ reads.cpp -std=c++11 -lmrloop -L. -luring -o oreads ${CFLAGS}
+g++ reads.cpp -std=c++20 -lmrloop -L. -luring -o oreads ${CFLAGS}

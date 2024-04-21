@@ -29,7 +29,7 @@ typedef struct _conn
   char buf[BUFSIZE];
 } conn_t;
 
-static mrLoop *loop = NULL;
+static mr_loop_t *loop = NULL;
 
 void on_timer() { 
   printf("tick\n");
@@ -51,7 +51,8 @@ void on_write_done( void *buf ) {
 static int leftover = 0;
 static int itemcnt = 0;
 static int last_sz = 0;
-void on_data(void *conn, int fd, ssize_t nread, char *buf) {
+
+int on_data(void *conn, int fd, ssize_t nread, char *buf) {
   printf("on_data\n"); // fd %d >%.*s<\n", ((conn_t*)conn)->fd, nread, buf);
   //print_buffer( buf, nread );
 }
@@ -66,7 +67,7 @@ void sig_handler(const int sig) {
 static int num;
 static int fd;
 
-void setTest() {
+int setTest( void *user_data) {
 
   char buf[4096];
   char key[2048];
@@ -90,7 +91,7 @@ void setTest() {
   struct iovec iov;
   iov.iov_base = buf;
   iov.iov_len = p - buf;
-  mrWritevf( loop, fd, &iov, 1 );
+  mr_writev( loop, fd, &iov, 1 );
 
   if ( num % 100000 == 0 ) {
     printf(" num %d fd %d\n", num, fd );
@@ -100,7 +101,7 @@ void setTest() {
     exit(0);
   }
 
-  mr_call_after( loop, setTest, 1 );
+  mr_call_after( loop, setTest, 1, NULL );
   
 }
 
@@ -110,14 +111,14 @@ int main() {
   //fork();
   //fork();
 
-  loop = createLoop(sig_handler);
-  fd = mrConnect(loop,"localhost", 7000, on_data);
+  loop = mr_create_loop(sig_handler);
+  fd = mr_connect(loop,"localhost", 7000, on_data);
   printf("fd = %d\n", fd);
   //addTimer(loop, 10, on_timer);
 
-  mr_call_after( loop, setTest, 1 );
+  mr_call_after( loop, setTest, 1, NULL );
 
-  runLoop(loop);
-  freeLoop(loop);
+  mr_run(loop);
+  mr_free(loop);
 
 }

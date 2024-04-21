@@ -11,7 +11,7 @@ static int bytes = 0;
 static struct iovec iovs[1024];
 static double start_time = 0;
 static int reps = 0;
-static int vlen = 100000;
+static int vlen = 10000;
 static int wcnt = 0;
 
 static void print_buffer( char* b, int len ) {
