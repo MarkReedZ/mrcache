@@ -7,9 +7,9 @@ Mrcache is a key value cache with support for compression that is 25x faster tha
 ```
 GET - 16B ops/sec
 
-  mrcache        9.8m 
-  redis          2.7m
-  memcached      400k
+  mrcache        18.6m 
+  redis           2.7m
+  memcached       400k
 
 GET - 10kb ops/sec
 

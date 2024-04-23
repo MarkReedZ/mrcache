@@ -9,7 +9,6 @@
 #include <errno.h>
 #include <sys/mman.h>   // mmap
 
-
 #include "liburing.h"
 
 #include "common.h"
@@ -33,7 +32,7 @@ static struct io_uring uring;
 
 hashtable_t *mrq_ht, *mrq_htnew;
 
-#define NUM_IOVEC 512
+#define NUM_IOVEC 1024
 typedef struct _conn
 {
   char *buf;
@@ -62,8 +61,6 @@ static char resp_get[2] = {0,1};
 static char resp_get_not_found[4] = {0,0,0,0};
 static char resp_get_not_found_len = 4;
 
-uint64_t num_bits64 (uint64_t x) { return 64 - __builtin_clzll(x); }
-
 static char* ring_buf;
 static char *zstd_buffer;
 static void setup() {
@@ -81,7 +78,6 @@ static void setup() {
 static void tear_down() {
 
   // TODO ring buffers and ring
-  //if (read_buffers) munmap( read_buffers, 4096*config.max_connections );
   free(zstd_buffer);
   exit(-1); // TODO
 }
@@ -472,8 +468,6 @@ static void usage(void) {
         );
 }
 
-// ./mrcache -m 1024 -d 20 -i 256
-
 int main (int argc, char **argv) {
 
   signal(SIGPIPE, SIG_IGN);
@@ -561,7 +555,7 @@ int main (int argc, char **argv) {
   signal(SIGTERM, sig_handler);
   signal(SIGHUP,  sig_handler);
 
-
+  // TODO Move this to a separate net.h
     int socket_options = 1;
     int socket_fd = -1;
     int ret;
@@ -583,19 +577,7 @@ int main (int argc, char **argv) {
     ret = io_uring_queue_init_params(4096, &uring, &params);
     if (ret != 0) { printf("Error initializing uring: %s\n",strerror(ret)); goto cleanup; }
 
-  /*  
-    read_buffers_len = 4096*config.max_connections;
-    read_buffers = mmap(NULL, read_buffers_len, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-
-    struct iovec *iovs = malloc( config.max_connections * sizeof(struct iovec) );
-    for (int i = 0; i != config.max_connections; i++) {
-        char *p = read_buffers + 4096 * i;
-        iovs[i].iov_base = p; iovs[i].iov_len = 4096;
-    }
-    //ret = io_uring_register_buffers(&uring, iovs, config.max_connections);
-    //if (ret != 0) { printf("Error initializing uring: %s\n",strerror(ret)); goto cleanup; }
-*/
-
+    // Setup the ring buffers 
     if (posix_memalign((void**)&ring_buf, 4096, READ_BUF_SIZE * NR_BUFS)) {
         perror("posix memalign");
         exit(1);
@@ -604,9 +586,6 @@ int main (int argc, char **argv) {
     struct io_uring_buf_ring* br;
     br = io_uring_setup_buf_ring(&uring, NR_BUFS, BGID, 0, &ret);
     if (!br) {
-        if (ret == -EINVAL) {
-            return 1;
-        }
         fprintf(stderr, "Buffer ring register failed %d %s\n", ret, strerror(errno));
         return 1;
     }
@@ -617,13 +596,6 @@ int main (int argc, char **argv) {
         ptr += READ_BUF_SIZE;
     }
     io_uring_buf_ring_advance(br, NR_BUFS);
-
-
-
-    //ret = io_uring_register_files_sparse(&uring, config.max_connections+1);
-    //if (ret != 0) { printf("Error in io_uring_register_files_sparse: %s\n",strerror(ret)); goto cleanup; }
-    //ret = io_uring_register_ring_fd(&uring);
-    //if (ret != 0) { printf("Error in io_uring_register_ring_fd: %s\n",strerror(ret)); goto cleanup; }
 
     struct sockaddr_in address;
     address.sin_family = AF_INET;
@@ -636,13 +608,6 @@ int main (int argc, char **argv) {
       exit(EXIT_FAILURE);
     }
 
-    //io_uring_prep_socket_direct(sqe, AF_INET, SOCK_STREAM, 0, IORING_FILE_INDEX_ALLOC, 0);
-    //io_uring_prep_socket(sqe, AF_INET, SOCK_STREAM, 0, 0);
-    //if (ret != 0) { printf("Error during uring prep socket: %s\n",strerror(ret)); goto cleanup; }
-    //ret = io_uring_wait_cqe(&uring, &cqe);
-    //socket_fd = cqe->res;
-    //if (socket_fd < 0) { printf("Error initializing socket: %s\n",strerror(socket_fd)); goto cleanup; }
-
     if (bind(socket_fd, (struct sockaddr*)&address, sizeof(address)) < 0) { printf("Error binding to hostname\n"); goto cleanup; }
     if (listen(socket_fd, config.max_connections) < 0) goto cleanup;
 
@@ -651,6 +616,7 @@ int main (int argc, char **argv) {
     io_uring_sqe_set_data64(sqe, NEW_CLIENT);
     io_uring_submit(&uring);
 
+  // Event loop
   while(1) {
     struct io_uring_cqe* cqe;
     unsigned int head;
@@ -659,7 +625,6 @@ int main (int argc, char **argv) {
     io_uring_for_each_cqe(&uring, head, cqe) {
       if ( cqe->user_data == NEW_CLIENT ) {
         int client_fd = cqe->res;
-        printf("New client: %d\n", client_fd);
 
         my_conn_t *conn = conn_new(client_fd);
     
@@ -676,15 +641,17 @@ int main (int argc, char **argv) {
 
         // If this is a multishot recv event
         if (cqe->flags & IORING_CQE_F_MORE) {
+
           int bid = (cqe->flags >> IORING_CQE_BUFFER_SHIFT);
-          printf("DELME buffer id %d res %d flags %08x\n", bid, cqe->res, cqe->flags);
           void *p = ring_buf + bid * READ_BUF_SIZE;
           ret = on_data(conn, cqe->res, p);
           io_uring_buf_ring_add(br, p, READ_BUF_SIZE, bid, BR_MASK, 0);
           io_uring_buf_ring_advance(br, 1);
+
         } else { // write done
+
           if ( cqe->res <= 0 ) {
-            fprintf(stderr, "multishot cancelled for: %ull\n", conn->fd);
+            //fprintf(stderr, "multishot cancelled for: %ull\n", conn->fd);
           } else {
             on_write_done(conn, cqe->res);
           }
@@ -695,18 +662,8 @@ int main (int argc, char **argv) {
 
     if (i) io_uring_cq_advance(&uring, i);
 
-    //printf("Handled %d events\n", i);
   }
 
-
-    printf("Shutting down\n");
-
-  //loop = mr_create_loop(sig_handler);
-  //config.loop = loop;
-  //mr_tcp_server( loop, config.port, setup_conn, on_data );
-  //mr_add_timer(loop, 0.1, clear_lru_timer, NULL);
-  //mr_run(loop);
-  //mr_free(loop);
   return 0;
 cleanup:
   printf("Exiting due to setup failure");

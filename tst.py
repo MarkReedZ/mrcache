@@ -20,6 +20,8 @@ async def run(loop):
     v = b"t" * 16
     await rc.set(k,v)
     print(await rc.get(k))
+    for c in k:
+      print(c)
 
   #print(  await rc.get(b"test") )
   #print(  await rc.get(b"test") )
