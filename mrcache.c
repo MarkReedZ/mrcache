@@ -29,6 +29,7 @@
 
 //static mr_loop_t *loop = NULL;
 static struct io_uring uring;
+static struct io_uring_buf_ring* br;
 
 hashtable_t *mrq_ht, *mrq_htnew;
 
@@ -78,6 +79,9 @@ static void setup() {
 static void tear_down() {
 
   // TODO ring buffers and ring
+  io_uring_free_buf_ring(&uring, br, NR_BUFS, 1);
+  io_uring_queue_exit(&uring);
+
   free(zstd_buffer);
   exit(-1); // TODO
 }
@@ -583,7 +587,6 @@ int main (int argc, char **argv) {
         exit(1);
     }
 
-    struct io_uring_buf_ring* br;
     br = io_uring_setup_buf_ring(&uring, NR_BUFS, BGID, 0, &ret);
     if (!br) {
         fprintf(stderr, "Buffer ring register failed %d %s\n", ret, strerror(errno));
@@ -660,6 +663,7 @@ int main (int argc, char **argv) {
       ++i;
     }
 
+    //printf("Handled %d cqes\n",i);
     if (i) io_uring_cq_advance(&uring, i);
 
   }
