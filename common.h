@@ -21,16 +21,17 @@ typedef struct hashtable hashtable_t;
 // globals
 extern hashtable_t *mrq_ht;
 
-struct settings {
+typedef struct config_t {
   int port;
   int max_memory; // mb
   int disk_size;  // gb
   int index_size;  // mb
   int block_size;  // mb
+  int max_connections;
   uint32_t flags;
   mr_loop_t *loop;
 
-  // Stats
+  // Stats // TODO move
   uint64_t tot_reads;
   uint64_t read_shifts;
   uint64_t tot_writes;
@@ -38,9 +39,8 @@ struct settings {
   uint32_t max_shift;
   uint64_t misses;
   uint64_t value_bytes, compressed_bytes;
-};
+} config_t;
 
-extern struct settings settings;
 
 #define LIKELY(x)   (__builtin_expect(!!(x), 1))
 #define UNLIKELY(x) (__builtin_expect(!!(x), 0))

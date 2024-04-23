@@ -14,7 +14,6 @@
 #include <unistd.h>
 //#include <sys/types.h>
 #include <sys/stat.h>
-#include "mrloop.h"
 
 static int num_blocks;
 static int min_block;
@@ -33,11 +32,11 @@ static int fsblock_size;
 static int fsblock_min_block;
 static int num_fs_blocks;
 
-void blocks_init() {
+void blocks_init(config_t *cfg) {
   blocks_bitlen = 24;
   blocks_bytelen = 0x1ull << blocks_bitlen;
-  num_blocks = settings.max_memory / settings.block_size;
-  base = malloc( settings.max_memory * 1024 * 1024 );
+  num_blocks = cfg->max_memory / cfg->block_size;
+  base = malloc( cfg->max_memory * 1024 * 1024 );
   min_block = 1;
   cur = base;
   cur_block = 1;
@@ -49,8 +48,9 @@ void blocks_init() {
     exit(EXIT_FAILURE);
   }
 
-  if ( settings.disk_size ) {
-    num_fs_blocks = (settings.disk_size*1024) / FSBLOCK_SIZE; 
+/*
+  if ( config.disk_size ) {
+    num_fs_blocks = (config.disk_size*1024) / FSBLOCK_SIZE; 
     fsblock_fds = calloc( num_fs_blocks, sizeof(int) );  
 
     mkdir( "fsblocks", 0700 );
@@ -65,6 +65,7 @@ void blocks_init() {
     fsblock_size = 0;
     fsblock_min_block = min_block;
   }
+*/
 }
 
 // Allocate memory of sz bytes 
@@ -95,7 +96,7 @@ void blocks_lru() {
   int i = min_block%num_blocks;
   int n = items_in_block[ i ];
 
-  if ( settings.disk_size ) { 
+  if ( config.disk_size ) { 
     blocks_fs_write(i);
   } else {
     fsblock_min_block = min_block+1;
@@ -172,7 +173,7 @@ void blocks_fs_write( int blk ) {
 
   struct iovec *iov = malloc(sizeof(struct iovec));
   iov->iov_base = p;
-  iov->iov_len = settings.block_size*1024*1024;
+  iov->iov_len = config.block_size*1024*1024;
 
   if ( fsblock_min_block == -1 ) { 
     fsblock_min_block = blk; 
@@ -180,8 +181,8 @@ void blocks_fs_write( int blk ) {
   fsblock_size += 1;
 
   int fd = fsblock_fds[fsblock_index];
-  mr_writevcb( settings.loop, fd, iov, 1, (void*)iov, blocks_on_write_done  );
-  mr_flush(settings.loop);
+  //mr_writevcb( config.loop, fd, iov, 1, (void*)iov, blocks_on_write_done  );
+  //mr_flush(config.loop);
 
   if ( fsblock_size == 64 ) {
     fsblock_index = (fsblock_index+1)%num_fs_blocks;
@@ -216,8 +217,8 @@ void blocks_fs_read( uint64_t blockAddr, disk_item_t *di ) {
   off_t off = ((blk-1)*blocks_bytelen) + (blockAddr & BLOCK_BITMASK);
 
   // Passing di works as the iov is the first part of the struct
-  mr_readvcb( settings.loop, fd, (struct iovec*)di, 1, off, di, blocks_on_read_done  );
-  mr_flush(settings.loop);
+  //mr_readvcb( config.loop, fd, (struct iovec*)di, 1, off, di, blocks_on_read_done  );
+  //mr_flush(config.loop);
 
 
 }

@@ -38,14 +38,14 @@ int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **out
   int shift = 0;
 
   // While we have a non zero addr and we haven't gone past the max shift
-  while( blockAddress && (shift <= settings.max_shift) ) {
+  while( blockAddress && (shift <= config.max_shift) ) {
 
     item *it = blocks_translate(blockAddress);
     shift += 1;
  
     // If the item is in memory
     if ( it ) {
-      settings.read_shifts += 1;
+      config.read_shifts += 1;
       char *itkey = it->data+it->size;
       if ( it->keysize == keylen && (memcmp(key, itkey, keylen) == 0)) {
         ht->last_block = GET_BLOCK(blockAddress);
@@ -87,7 +87,7 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
     }
     hash = (hash + 1) & ht->mask;
     shift += 1;
-    if ( shift > settings.max_shift ) settings.max_shift = shift;
+    if ( shift > config.max_shift ) config.max_shift = shift;
 
     // if 0 or an LRU'd block we can install here TODO wouldn't blocks translate just return null breaking us out?
     // TODO This will become if disk increment until not?

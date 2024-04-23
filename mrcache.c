@@ -7,8 +7,10 @@
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/mman.h>   // mmap
 
-#include "mrloop.h"
+
+#include "liburing.h"
 
 #include "common.h"
 #include "mrcache.h"
@@ -18,16 +20,23 @@
 #include "xxhash.h"
 
 #define BUFFER_SIZE 32*1024
+#define READ_BUF_SIZE 4096L // * 1024
+#define NR_BUFS 16 * 1024
 
-static mr_loop_t *loop = NULL;
-struct settings settings;
+#define BR_MASK (NR_BUFS - 1)
+#define BGID 1 
+
+#define NEW_CLIENT 0xffffffffffffffff
+
+//static mr_loop_t *loop = NULL;
+static struct io_uring uring;
 
 hashtable_t *mrq_ht, *mrq_htnew;
 
 #define NUM_IOVEC 512
 typedef struct _conn
 {
-  char *buf, *recv_buf;
+  char *buf;
   int max_sz;
   int cur_sz;
   int needs;
@@ -55,11 +64,12 @@ static char resp_get_not_found_len = 4;
 
 uint64_t num_bits64 (uint64_t x) { return 64 - __builtin_clzll(x); }
 
+static char* ring_buf;
 static char *zstd_buffer;
 static void setup() {
   mrq_ht = malloc( sizeof(hashtable_t) );
-  ht_init(mrq_ht, settings.index_size * 1024 * 1024);
-  blocks_init();
+  ht_init(mrq_ht, config.index_size * 1024 * 1024);
+  blocks_init(&config);
 
   srand((int)time(NULL));
 
@@ -69,7 +79,11 @@ static void setup() {
 }
 
 static void tear_down() {
+
+  // TODO ring buffers and ring
+  //if (read_buffers) munmap( read_buffers, 4096*config.max_connections );
   free(zstd_buffer);
+  exit(-1); // TODO
 }
 
 static void print_buffer( char* b, int len ) {
@@ -79,22 +93,18 @@ static void print_buffer( char* b, int len ) {
   printf("\n");
 }
 
-void *setup_conn(int fd, char **buf, int *buflen ) {
+my_conn_t *conn_new(int fd ) {
   my_conn_t *c = calloc( 1, sizeof(my_conn_t));
   c->fd = fd;
   c->buf = malloc( BUFFER_SIZE*2 );
-  c->recv_buf = malloc( BUFFER_SIZE );
   c->max_sz = BUFFER_SIZE*2;
-  *buf = c->recv_buf;
-  *buflen = BUFFER_SIZE;
   memset(c->free_me, 0, NUM_IOVEC);
   return c;
 }
 
 void free_conn( my_conn_t *c ) {
-  mr_close( loop, c->fd );
+  //mr_close( loop, c->fd );
   free(c->buf);
-  free(c->recv_buf);
   // TODO free the output queue items?
   free(c);
 }
@@ -140,26 +150,30 @@ void finishOnData( my_conn_t *conn ) {
     exit(1);
   }
   if ( conn->iov_end > conn->iov_start ) {
-    mr_writevcb( loop, conn->fd, &(conn->iovs[conn->iov_start]), conn->iov_end-conn->iov_start , (void*)conn, on_write_done  );
-    mr_flush(loop);
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&uring);
+    io_uring_prep_writev(sqe, conn->fd, &(conn->iovs[conn->iov_start]), conn->iov_end-conn->iov_start, 0);
+    io_uring_sqe_set_data(sqe, conn);
+    io_uring_submit(&uring);
+
+    //mr_writevcb( loop, conn->fd, &(conn->iovs[conn->iov_start]), conn->iov_end-conn->iov_start , (void*)conn, on_write_done  );
+    //mr_flush(loop);
     conn->write_in_progress = 1;
   }
 }
 
 
 
-int on_data(void *c, int fd, ssize_t nread, char *buf) {
-  my_conn_t *conn = (my_conn_t*)c;
+int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
   char *p = NULL;
   int data_left = nread;
 
   if ( nread == 0 ) { 
-    free_conn(c);
+    free_conn(conn);
     return 1;
   }
 
   if ( nread < 0 ) { 
-    free_conn(c);
+    free_conn(conn);
     return 1;
   }
 
@@ -220,7 +234,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
       DBG_READ printf("get ht_find rc %d\n", rc );
 
-      settings.tot_reads += 1;
+      config.tot_reads += 1;
 
       if ( rc == 1 && it ) { // Found
 
@@ -228,8 +242,8 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 	      conn->iovs[conn->iov_end].iov_len  = it->size+4;
 	      conn->iov_end += 1;
 
-        //DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
-        //DBG_READ print_buffer( it->data, it->size );
+        DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
+        DBG_READ print_buffer( it->data, it->size );
 
       } else {
 
@@ -237,8 +251,8 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 	      conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
 	      conn->iov_end += 1;
 
-        settings.misses += 1;
-        //DBG_READ printf("getkey - not found\n");
+        config.misses += 1;
+        DBG_READ printf("getkey - not found\n");
       }
 
       p += 4 + keylen;
@@ -273,7 +287,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       uint64_t blockAddr;
       item *it;
 
-      settings.tot_writes += 1;
+      config.tot_writes += 1;
 
       blockAddr = blocks_alloc( sizeof(item) + vlen + keylen );
       it = blocks_translate( blockAddr );
@@ -319,7 +333,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       int rc = ht_find(mrq_ht, key, keylen, hv, (void*)&it);
       DBG_READ printf("get ht_find rc %d\n", rc );
 
-      settings.tot_reads += 1;
+      config.tot_reads += 1;
 
       if ( rc == 1 && it ) { // Found
 
@@ -347,7 +361,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 	      conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
 	      conn->iov_end += 1;
 
-        settings.misses += 1;
+        config.misses += 1;
         DBG_READ printf("getkey - not found\n");
       }
 
@@ -383,7 +397,7 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
       uint64_t blockAddr;
       item *it;
 
-      settings.tot_writes += 1;
+      config.tot_writes += 1;
 
       int cmplen = ZSTD_compress( zstd_buffer, vlen+64, p+8+keylen, vlen, 2 ); // instead of 64 use ZSTD_COMPRESSBOUND?
 
@@ -416,11 +430,11 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
     } else if ( cmd == STAT ) {
 
       printf("STAT\n");
-      printf("Total reads  %ld\n", settings.tot_reads);
-      printf("Total misses %ld\n", settings.misses);
-      printf("Total writes %ld\n", settings.tot_writes);
-      printf("Avg shift %.2f\n", (double)settings.read_shifts/settings.tot_reads);
-      printf("Max shift %d\n", settings.max_shift);
+      printf("Total reads  %ld\n", config.tot_reads);
+      printf("Total misses %ld\n", config.misses);
+      printf("Total writes %ld\n", config.tot_writes);
+      printf("Avg shift %.2f\n", (double)config.read_shifts/config.tot_reads);
+      printf("Max shift %d\n", config.max_shift);
       ht_stat(mrq_ht);
 
       data_left -= 2;
@@ -441,7 +455,10 @@ int on_data(void *c, int fd, ssize_t nread, char *buf) {
 
 static void sig_handler(const int sig) {
   printf("Signal handled: %s.\n", strsignal(sig));
-  exit(EXIT_SUCCESS);
+  if ( sig == SIGINT || sig == SIGTERM ) {
+    tear_down();
+    exit(EXIT_SUCCESS);
+  }
 }
 
 static void usage(void) {
@@ -478,32 +495,33 @@ int main (int argc, char **argv) {
     {0, 0, 0, 0}
   };
 
-  settings.port = 7000;
-  settings.max_memory = 128;
-  settings.flags = 0;
-  //settings.disk_size = 0;
-  settings.index_size = 0;
-  settings.block_size = 16;
+  config.port = 7000;
+  config.max_memory = 128;
+  config.flags = 0;
+  //config.disk_size = 0;
+  config.index_size = 0;
+  config.block_size = 16;
+  config.max_connections = 128;
 
-  settings.read_shifts  = 0;
-  settings.tot_reads    = 0;
-  settings.tot_writes   = 0;
-  settings.write_shifts = 0;
+  config.read_shifts  = 0;
+  config.tot_reads    = 0;
+  config.tot_writes   = 0;
+  config.write_shifts = 0;
 
   int optindex, c;
   while (-1 != (c = getopt_long(argc, argv, shortopts, longopts, &optindex))) {
     switch (c) {
     case 'p':
-      settings.port = atoi(optarg);
+      config.port = atoi(optarg);
       break;
     case 'm':
-      settings.max_memory = atoi(optarg);
+      config.max_memory = atoi(optarg);
       break;
     //case 'd':
-      //settings.disk_size = atoi(optarg);
+      //config.disk_size = atoi(optarg);
       //break;
     case 'i':
-      settings.index_size = atoi(optarg);
+      config.index_size = atoi(optarg);
       break;
     case 'h':
       usage();
@@ -515,16 +533,16 @@ int main (int argc, char **argv) {
     }
   }
 
-  if ( settings.index_size == 0 ) {
+  if ( config.index_size == 0 ) {
     // By default the index size is 10% of memory rounded up to a power of 2
-    settings.index_size = (settings.max_memory * 0.1);
+    config.index_size = (config.max_memory * 0.1);
     int power = 1;
-    while(power < settings.index_size) {
+    while(power < config.index_size) {
         power <<= 1;
     }
-    settings.index_size = power;
+    config.index_size = power;
   }
-  if ( !IS_POWER_OF_TWO(settings.index_size) ) {
+  if ( !IS_POWER_OF_TWO(config.index_size) ) {
     printf("The index size must be a power of two\n\n");
     usage();
     return(2);
@@ -532,23 +550,190 @@ int main (int argc, char **argv) {
 
   setup();
 
-  double max_items = (double)(settings.index_size>>3)*0.70; // Each entry is 8B max 70% full
-  //if ( settings.disk_size ) {
-    //printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", settings.port, settings.max_memory, settings.disk_size, max_items, settings.index_size );
+  double max_items = (double)(config.index_size>>3)*0.70; // Each entry is 8B max 70% full
+  //if ( config.disk_size ) {
+    //printf("Mrcache starting up on port %d with %dmb of memory and %dgb of disk allocated.  The max number of items is %0.1fm based on the index size of %dm\n", config.port, config.max_memory, config.disk_size, max_items, config.index_size );
   //} else {
-    printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", settings.port, settings.max_memory+settings.index_size, max_items );
+    printf("Mrcache starting up on port %d with %dmb allocated. Maximum items is %0.1fm\n", config.port, config.max_memory+config.index_size, max_items );
   //}
-  loop = mr_create_loop(sig_handler);
-  settings.loop = loop;
-  mr_tcp_server( loop, settings.port, setup_conn, on_data );
+
+  signal(SIGINT,  sig_handler);
+  signal(SIGTERM, sig_handler);
+  signal(SIGHUP,  sig_handler);
+
+
+    int socket_options = 1;
+    int socket_fd = -1;
+    int ret;
+    struct io_uring_params params;
+    struct io_uring_sqe* sqe;
+    struct io_uring_cqe* cqe;
+
+    memset(&uring, 0, sizeof(uring));
+    memset(&params, 0, sizeof(params));
+
+    params.flags |= IORING_SETUP_SINGLE_ISSUER;
+    params.features |= IORING_FEAT_FAST_POLL;
+    params.features |= IORING_FEAT_SQPOLL_NONFIXED;
+    params.flags |= IORING_SETUP_SQPOLL;
+    params.sq_thread_idle = 1000; // TODO
+    params.flags |= IORING_SETUP_CQSIZE | IORING_SETUP_CLAMP;
+    params.cq_entries = 4096;
+
+    ret = io_uring_queue_init_params(4096, &uring, &params);
+    if (ret != 0) { printf("Error initializing uring: %s\n",strerror(ret)); goto cleanup; }
+
+  /*  
+    read_buffers_len = 4096*config.max_connections;
+    read_buffers = mmap(NULL, read_buffers_len, PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+
+    struct iovec *iovs = malloc( config.max_connections * sizeof(struct iovec) );
+    for (int i = 0; i != config.max_connections; i++) {
+        char *p = read_buffers + 4096 * i;
+        iovs[i].iov_base = p; iovs[i].iov_len = 4096;
+    }
+    //ret = io_uring_register_buffers(&uring, iovs, config.max_connections);
+    //if (ret != 0) { printf("Error initializing uring: %s\n",strerror(ret)); goto cleanup; }
+*/
+
+    if (posix_memalign((void**)&ring_buf, 4096, READ_BUF_SIZE * NR_BUFS)) {
+        perror("posix memalign");
+        exit(1);
+    }
+
+    struct io_uring_buf_ring* br;
+    br = io_uring_setup_buf_ring(&uring, NR_BUFS, BGID, 0, &ret);
+    if (!br) {
+        if (ret == -EINVAL) {
+            return 1;
+        }
+        fprintf(stderr, "Buffer ring register failed %d %s\n", ret, strerror(errno));
+        return 1;
+    }
+
+    void* ptr = ring_buf;
+    for (int i = 0; i < NR_BUFS; i++) {
+        io_uring_buf_ring_add(br, ptr, READ_BUF_SIZE, i , BR_MASK, i);
+        ptr += READ_BUF_SIZE;
+    }
+    io_uring_buf_ring_advance(br, NR_BUFS);
+
+
+
+    //ret = io_uring_register_files_sparse(&uring, config.max_connections+1);
+    //if (ret != 0) { printf("Error in io_uring_register_files_sparse: %s\n",strerror(ret)); goto cleanup; }
+    //ret = io_uring_register_ring_fd(&uring);
+    //if (ret != 0) { printf("Error in io_uring_register_ring_fd: %s\n",strerror(ret)); goto cleanup; }
+
+    struct sockaddr_in address;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    //address.sin_addr.s_addr = inet_addr(config.hostname);
+    address.sin_port = htons(config.port); 
+
+    if ((socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0)) == -1) {
+      printf("socket error : %d ...\n", errno);
+      exit(EXIT_FAILURE);
+    }
+
+    //io_uring_prep_socket_direct(sqe, AF_INET, SOCK_STREAM, 0, IORING_FILE_INDEX_ALLOC, 0);
+    //io_uring_prep_socket(sqe, AF_INET, SOCK_STREAM, 0, 0);
+    //if (ret != 0) { printf("Error during uring prep socket: %s\n",strerror(ret)); goto cleanup; }
+    //ret = io_uring_wait_cqe(&uring, &cqe);
+    //socket_fd = cqe->res;
+    //if (socket_fd < 0) { printf("Error initializing socket: %s\n",strerror(socket_fd)); goto cleanup; }
+
+    if (bind(socket_fd, (struct sockaddr*)&address, sizeof(address)) < 0) { printf("Error binding to hostname\n"); goto cleanup; }
+    if (listen(socket_fd, config.max_connections) < 0) goto cleanup;
+
+    sqe = io_uring_get_sqe(&uring);
+    io_uring_prep_multishot_accept(sqe, socket_fd, NULL, NULL, 0);//IORING_FILE_INDEX_ALLOC);
+    io_uring_sqe_set_data64(sqe, NEW_CLIENT);
+    io_uring_submit(&uring);
+
+  while(1) {
+    struct io_uring_cqe* cqe;
+    unsigned int head;
+    unsigned int i = 0;
+
+    io_uring_for_each_cqe(&uring, head, cqe) {
+      if ( cqe->user_data == NEW_CLIENT ) {
+        int client_fd = cqe->res;
+        printf("New client: %d\n", client_fd);
+
+        my_conn_t *conn = conn_new(client_fd);
+    
+        struct io_uring_sqe* sqe;
+        sqe = io_uring_get_sqe(&uring);
+        io_uring_prep_recv_multishot(sqe, client_fd, NULL, 0, 0);
+        io_uring_sqe_set_data(sqe, (void*)conn);
+        sqe->buf_group = BGID;
+        sqe->flags |= IOSQE_BUFFER_SELECT;
+        io_uring_submit(&uring);
+    
+      } else {
+        my_conn_t *conn = (my_conn_t*)io_uring_cqe_get_data(cqe);
+
+        // If this is a multishot recv event
+        if (cqe->flags & IORING_CQE_F_MORE) {
+          int bid = (cqe->flags >> IORING_CQE_BUFFER_SHIFT);
+          printf("DELME buffer id %d res %d flags %08x\n", bid, cqe->res, cqe->flags);
+          void *p = ring_buf + bid * READ_BUF_SIZE;
+          ret = on_data(conn, cqe->res, p);
+          io_uring_buf_ring_add(br, p, READ_BUF_SIZE, bid, BR_MASK, 0);
+          io_uring_buf_ring_advance(br, 1);
+        } else { // write done
+          if ( cqe->res <= 0 ) {
+            fprintf(stderr, "multishot cancelled for: %ull\n", conn->fd);
+          } else {
+            on_write_done(conn, cqe->res);
+          }
+        }
+      }
+      ++i;
+    }
+
+    if (i) io_uring_cq_advance(&uring, i);
+
+    //printf("Handled %d events\n", i);
+  }
+
+
+    printf("Shutting down\n");
+
+  //loop = mr_create_loop(sig_handler);
+  //config.loop = loop;
+  //mr_tcp_server( loop, config.port, setup_conn, on_data );
   //mr_add_timer(loop, 0.1, clear_lru_timer, NULL);
-  mr_run(loop);
-  mr_free(loop);
-
-  tear_down();
-
+  //mr_run(loop);
+  //mr_free(loop);
+  return 0;
+cleanup:
+  printf("Exiting due to setup failure");
   return 0;
 }
 
+/*
+static void queue_cancel(struct io_uring *ring, struct conn *c)
+{ 
+  struct io_uring_sqe *sqe;
+  int flags = 0;
+    
+  if (fixed_files)
+    flags |= IORING_ASYNC_CANCEL_FD_FIXED;
+  
+  sqe = get_sqe(ring);
+  io_uring_prep_cancel_fd(sqe, c->in_fd, flags);
+  encode_userdata(sqe, c, __CANCEL, 0, c->in_fd);
+  c->pending_cancels++;
 
+  if (c->out_fd != -1) {
+    sqe = get_sqe(ring);
+    io_uring_prep_cancel_fd(sqe, c->out_fd, flags);
+    encode_userdata(sqe, c, __CANCEL, 0, c->out_fd);
+    c->pending_cancels++;
+  }
 
+  io_uring_submit(ring);
+}
+*/

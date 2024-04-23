@@ -13,6 +13,8 @@ enum cmds {
   CMDS_END
 };
 
+static config_t config;
+
 typedef struct _conn my_conn_t;
 
 typedef struct __attribute__((__packed__)) _item {

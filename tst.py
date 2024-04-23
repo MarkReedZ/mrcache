@@ -17,7 +17,7 @@ async def run(loop):
 
   if 1:
     k = b"test" 
-    v = b"t" * 1000
+    v = b"t" * 16
     await rc.set(k,v)
     print(await rc.get(k))
 
