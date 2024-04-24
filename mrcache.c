@@ -1,4 +1,5 @@
 
+
 #include <zstd.h>
 #include <signal.h>
 #include <getopt.h>
@@ -19,7 +20,7 @@
 #include "xxhash.h"
 
 #define BUFFER_SIZE 32*1024
-#define READ_BUF_SIZE 4096L // * 1024
+#define READ_BUF_SIZE 1024L * 32 // * 1024
 #define NR_BUFS 16 * 1024
 
 #define BR_MASK (NR_BUFS - 1)
@@ -34,6 +35,16 @@ static struct io_uring_buf_ring* br;
 hashtable_t *mrq_ht, *mrq_htnew;
 
 #define NUM_IOVEC 1024
+#define NUM_IOVEC_GROUPS 256
+typedef struct _iovecs
+{
+  int num, fd, idx;
+  int in_prog;
+  uint64_t bytes;
+  struct iovec iovs[NUM_IOVEC];
+  void *free_me[NUM_IOVEC];
+} iovecs_t;
+
 typedef struct _conn
 {
   char *buf;
@@ -45,10 +56,10 @@ typedef struct _conn
   getq_item_t *getq_head, *getq_tail;
   bool stalled;
 
-  struct iovec iovs[NUM_IOVEC];
-  char free_me[NUM_IOVEC];
-  int iov_start, iov_end, num_iov;
-  int write_in_progress;
+  iovecs_t iovecs[NUM_IOVEC_GROUPS];
+  int iov_idx;
+  //int iov_start, iov_end, num_iov;
+  //int write_in_progress;
 } my_conn_t;
 
 struct sockaddr_in addr;
@@ -56,6 +67,7 @@ struct sockaddr_in addr;
 //static int total_clients = 0;  // Total number of connected clients
 //static int total_mem = 0;
 static int num_writes = 0;
+static uint64_t total_bytes = 0;
 //static int num_items = 0;
 
 static char resp_get[2] = {0,1};
@@ -98,14 +110,17 @@ my_conn_t *conn_new(int fd ) {
   c->fd = fd;
   c->buf = malloc( BUFFER_SIZE*2 );
   c->max_sz = BUFFER_SIZE*2;
-  memset(c->free_me, 0, NUM_IOVEC);
+  for (int i = 0; i<NUM_IOVEC_GROUPS; i++ ) {
+    c->iovecs[i].fd = fd;
+    c->iovecs[i].idx = i;
+  }
+  //memset(c->iovecs, 0, 8*sizeof(iovecs_t));
+  //memset(c->free_me, 0, NUM_IOVEC);
   return c;
 }
 
 void free_conn( my_conn_t *c ) {
-  //mr_close( loop, c->fd );
   free(c->buf);
-  // TODO free the output queue items?
   free(c);
 }
 
@@ -125,39 +140,71 @@ static void conn_append( my_conn_t* c, char *data, int len ) {
 
 }
 
-void on_write_done(void *user_data, int res) {
-  DBG printf("on_write_done - res %d conn %p\n", res, user_data);
+void on_write_done(iovecs_t *iovecs, int res) {
+
+  //printf("DELME on_write_done res %d idx %d\n",res, iovecs->idx);
+  // Short write
+  if ( res < iovecs->bytes ) {
+    //printf("DELME short write res %d bytes %d num %d\n",res, iovecs->bytes, iovecs->num);
+    int left = iovecs->bytes - res;
+    iovecs->bytes = left;
+    int i;
+    for (i = iovecs->num-1; i > 0; i-- ) {
+      left -= iovecs->iovs[i].iov_len;
+      
+      if ( left == 0 ) break;
+      if ( left < 0 ) {
+        iovecs->iovs[i].iov_base -= left; 
+        iovecs->iovs[i].iov_len += left; 
+        break;
+      }
+    } 
+
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&uring);
+    io_uring_prep_writev(sqe, iovecs->fd, &(iovecs->iovs[i]), iovecs->num-i, 0);
+    io_uring_sqe_set_data(sqe, iovecs);
+    io_uring_submit(&uring);
+    return;
+  }
+    
 
   if ( res < 0 ) {
     printf(" err: %s\n",strerror(-res));
     exit(-1); // TODO
   }
-  my_conn_t *conn = (my_conn_t*)user_data;
-  conn->write_in_progress = 0;
-  for ( int i = conn->iov_start; i < conn->iov_end; i++ ) {
-    if ( conn->free_me[i] == 1 ) {
-      free(conn->iovs[i].iov_base);
-      conn->free_me[i] = 0;
+
+  for ( int i = 0; i < iovecs->num; i++ ) {
+    if ( iovecs->free_me[i] ) {
+      free(iovecs->free_me[i]);
+      iovecs->free_me[i] = NULL;
     }
   }
-  conn->iov_start = 0;
-  conn->iov_end = 0;
+
+  iovecs->in_prog = 0;
+  iovecs->num = 0;
+  iovecs->bytes = 0;
 }
-
 void finishOnData( my_conn_t *conn ) {
-  if ( conn->write_in_progress == 1 ) {
-    printf("Got more cmds while writes are still in progress\n");
-    exit(1);
-  }
-  if ( conn->iov_end > conn->iov_start ) {
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&uring);
-    io_uring_prep_writev(sqe, conn->fd, &(conn->iovs[conn->iov_start]), conn->iov_end-conn->iov_start, 0);
-    io_uring_sqe_set_data(sqe, conn);
-    io_uring_submit(&uring);
+  iovecs_t *iovecs = conn->iovecs + conn->iov_idx;
 
-    //mr_writevcb( loop, conn->fd, &(conn->iovs[conn->iov_start]), conn->iov_end-conn->iov_start , (void*)conn, on_write_done  );
-    //mr_flush(loop);
-    conn->write_in_progress = 1;
+  //if ( iovecs->in_prog == 1 ) {
+    //printf("Got more cmds while writes are still in progress\n");
+    //exit(1);
+  //}
+  if ( iovecs->num > 0 ) {
+    //int bytes = 0;
+    //for ( int i = 0; i < iovecs->num; i++ ) {
+      //bytes += iovecs->iovs[i].iov_len;
+    //}
+    //total_bytes += bytes;
+    //printf("DELME idx %d num %d\n", conn->iov_idx, iovecs->num);
+    
+    iovecs->in_prog = 1; 
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&uring);
+    io_uring_prep_writev(sqe, iovecs->fd, &(iovecs->iovs[0]), iovecs->num, 0);
+    io_uring_sqe_set_data(sqe, iovecs);
+    io_uring_submit(&uring);
+    conn->iov_idx += 1; if ( conn->iov_idx >= NUM_IOVEC_GROUPS ) conn->iov_idx = 0; //TODO
   }
 }
 
@@ -167,15 +214,7 @@ int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
   char *p = NULL;
   int data_left = nread;
 
-  if ( nread == 0 ) { 
-    free_conn(conn);
-    return 1;
-  }
-
-  if ( nread < 0 ) { 
-    free_conn(conn);
-    return 1;
-  }
+  if ( nread <= 0 ) { free_conn(conn); return 1; }
 
   // If we have partial data for this connection
   if ( conn->cur_sz ) {
@@ -191,6 +230,9 @@ int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
     p = buf;
   }
 
+  iovecs_t *iovecs = conn->iovecs + conn->iov_idx;
+
+  //printf("DELME left %d iov idx %d\n", data_left, conn->iov_idx );
   while ( data_left > 0 ) {
 
     if ( data_left < 2 ) {
@@ -238,18 +280,24 @@ int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
 
       if ( rc == 1 && it ) { // Found
 
-	      conn->iovs[conn->iov_end].iov_base = ((char*)it)+2;
-	      conn->iovs[conn->iov_end].iov_len  = it->size+4;
-	      conn->iov_end += 1;
+        //if ( iovecs->in_prog == 1 ) {
+          //printf("DELME in prog!!!! \n");
+          //exit(1);
+        //}
+	      iovecs->iovs[iovecs->num].iov_base = ((char*)it)+2;
+	      iovecs->iovs[iovecs->num].iov_len  = it->size+4;
+	      iovecs->num += 1;
+	      iovecs->bytes += it->size+4;
 
         DBG_READ printf("getkey: found >%.*s<\n", it->size, it->data);
-        DBG_READ print_buffer( it->data, it->size );
+        //DBG_READ print_buffer( it->data, it->size );
 
       } else {
 
-	      conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
-	      conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
-	      conn->iov_end += 1;
+	      iovecs->iovs[iovecs->num].iov_base = resp_get_not_found;
+	      iovecs->iovs[iovecs->num].iov_len  = resp_get_not_found_len;
+	      iovecs->num += 1;
+	      iovecs->bytes += resp_get_not_found_len;
 
         config.misses += 1;
         DBG_READ printf("getkey - not found\n");
@@ -339,9 +387,10 @@ int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
 
         unsigned long long const decomp_sz = ZSTD_getFrameContentSize(it->data, it->size);
         if ( decomp_sz < 0 ) {  // This data wasn't compressed.  Return not found.
-	        conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
-	        conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
-	        conn->iov_end += 1;
+	        iovecs->iovs[iovecs->num].iov_base = resp_get_not_found;
+	        iovecs->iovs[iovecs->num].iov_len  = resp_get_not_found_len;
+	        iovecs->num += 1;
+	        iovecs->bytes += resp_get_not_found_len;
         }
 
         char *dbuf = malloc( decomp_sz+4 );
@@ -349,17 +398,18 @@ int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
         uint32_t *p32 = (uint32_t*)(dbuf);
         *p32 = decomp_size;
 
-	      conn->iovs[conn->iov_end].iov_base = dbuf;
-	      conn->iovs[conn->iov_end].iov_len  = decomp_size+4;
-	      conn->free_me[conn->iov_end] = 1;
-	      conn->iov_end += 1;
-
+	      iovecs->iovs[iovecs->num].iov_base = dbuf;
+	      iovecs->iovs[iovecs->num].iov_len  = decomp_size+4;
+	      iovecs->free_me[iovecs->num] = dbuf;
+	      iovecs->num += 1;
+	      iovecs->bytes += decomp_size+4;
 
       } else {
 
-	      conn->iovs[conn->iov_end].iov_base = resp_get_not_found;
-	      conn->iovs[conn->iov_end].iov_len  = resp_get_not_found_len;
-	      conn->iov_end += 1;
+	      iovecs->iovs[iovecs->num].iov_base = resp_get_not_found;
+	      iovecs->iovs[iovecs->num].iov_len  = resp_get_not_found_len;
+	      iovecs->num += 1;
+	      iovecs->bytes += resp_get_not_found_len;
 
         config.misses += 1;
         DBG_READ printf("getkey - not found\n");
@@ -449,7 +499,6 @@ int on_data(my_conn_t *conn, ssize_t nread, char *buf) {
   } 
 
   finishOnData(conn);
-
   return 0;
 }
 
@@ -559,7 +608,6 @@ int main (int argc, char **argv) {
   signal(SIGTERM, sig_handler);
   signal(SIGHUP,  sig_handler);
 
-  // TODO Move this to a separate net.h
     int socket_options = 1;
     int socket_fd = -1;
     int ret;
@@ -625,6 +673,10 @@ int main (int argc, char **argv) {
     unsigned int head;
     unsigned int i = 0;
 
+    //unsigned tail = io_uring_smp_load_acquire((&uring)->cq.ktail);
+    //for (head = *(&uring)->cq.khead; \
+         (cqe = (head != tail ?  &(&uring)->cq.cqes[io_uring_cqe_index(&uring, head, (&uring)->cq.ring_mask)] : NULL)); \
+         head++)  {
     io_uring_for_each_cqe(&uring, head, cqe) {
       if ( cqe->user_data == NEW_CLIENT ) {
         int client_fd = cqe->res;
@@ -640,10 +692,10 @@ int main (int argc, char **argv) {
         io_uring_submit(&uring);
     
       } else {
-        my_conn_t *conn = (my_conn_t*)io_uring_cqe_get_data(cqe);
 
         // If this is a multishot recv event
         if (cqe->flags & IORING_CQE_F_MORE) {
+          my_conn_t *conn = (my_conn_t*)io_uring_cqe_get_data(cqe);
 
           int bid = (cqe->flags >> IORING_CQE_BUFFER_SHIFT);
           void *p = ring_buf + bid * READ_BUF_SIZE;
@@ -652,19 +704,20 @@ int main (int argc, char **argv) {
           io_uring_buf_ring_advance(br, 1);
 
         } else { // write done
-
+          iovecs_t *iovecs = (iovecs_t*)io_uring_cqe_get_data(cqe);
           if ( cqe->res <= 0 ) {
             //fprintf(stderr, "multishot cancelled for: %ull\n", conn->fd);
           } else {
-            on_write_done(conn, cqe->res);
+            on_write_done(iovecs, cqe->res);
           }
         }
       }
       ++i;
+      if ( i > 128 ) break;
     }
 
-    //printf("Handled %d cqes\n",i);
     if (i) io_uring_cq_advance(&uring, i);
+    //if (i) printf("YAY handled %d events\n",i);
 
   }
 

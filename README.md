@@ -5,13 +5,13 @@ Mrcache is a key value cache with support for compression that is 25x faster tha
 # Benchmarks
 
 ```
-GET - 16B ops/sec
+GET - 16B (ops/sec)
 
   mrcache        18.6m 
-  redis           2.7m
+  redis           2.5m
   memcached       400k
 
-GET - 10kb ops/sec
+GET - 10kb (ops/sec)
 
   mrcache         979k
   mrcache (zstd)  212k
