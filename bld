@@ -6,7 +6,7 @@ CFLAGS='-O3 -std=c99'
 #gcc -D_GNU_SOURCE probe.c -o probe -luring ${CFLAGS}
 gcc -D_GNU_SOURCE -c hashtable.c -o hashtable.o -luring ${CFLAGS}
 gcc -D_GNU_SOURCE -c blocks.c -o blocks.o  -luring ${CFLAGS}
-gcc -D_GNU_SOURCE mrcache.c -o mrcache hashtable.o blocks.o -luring -lzstd ${CFLAGS} 
+gcc -D_GNU_SOURCE mrcache.c net.c -o mrcache hashtable.o blocks.o -luring -lzstd ${CFLAGS} 
 #gcc mrcache.o hashtable.o blocks.o -lmrloop -luring -lzstd -o mrcache ${CFLAGS}
 rm *.o
 

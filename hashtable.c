@@ -32,7 +32,6 @@ void ht_clear(hashtable_t *ht) {
 int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **outptr) {
 
   uint32_t hash = hv & ht->mask;
-  DBG_SET printf("ht_find hash 0x%08x \n", hash );
 
   uint64_t blockAddress = ht->tbl[hash];
   int shift = 0;
@@ -66,7 +65,6 @@ int ht_find(hashtable_t *ht, char *key, uint16_t keylen, uint64_t hv, void **out
 static int num_inserts = 0;
 // TODO Can pass in the item to avoid an extra translate
 void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, uint64_t hv) {
-  DBG_SET printf("ht_insert blkadr 0x%lx key >%.*s<\n", blockAddr, keylen, key);
 
   num_inserts += 1;
 
@@ -95,7 +93,6 @@ void ht_insert(hashtable_t *ht, uint64_t blockAddr, char *key, uint16_t keylen, 
     it = blocks_translate(ht->tbl[hash]);
   }
 
-  DBG_SET printf("ht_insert hash 0x%08x \n", hash );
   SET_KEY( blockAddr, ohash );
   ht->tbl[hash] = blockAddr;
       

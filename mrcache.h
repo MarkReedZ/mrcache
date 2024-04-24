@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "mrloop.h"
+//#include "mrloop.h"
 #include "common.h"
 
 enum cmds {
@@ -45,6 +45,6 @@ typedef struct _getq_item_t {
 
 } getq_item_t;
 
-
+int on_data(my_conn_t *conn, char *buf, int data_left);
 
 

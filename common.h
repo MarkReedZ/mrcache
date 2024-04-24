@@ -12,8 +12,6 @@
 #include "hashtable.h"
 
 #define DBG if(0) 
-#define DBG_READ if(0)
-#define DBG_SET if(0)
 
 typedef struct hashtable hashtable_t;
 
