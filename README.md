@@ -23,9 +23,8 @@ GET - 10kb (ops/sec)
 # Dependencies
 
 * Linux kernel version 5.8+
-* https://github.com/MarkReedZ/mrloop - io_uring based C event loop
-* [Python asyncio client](https://github.com/MarkReedZ/asyncmrcache)
 * [zstd compression](https://github.com/facebook/zstd)
+* [Python asyncio client](https://github.com/MarkReedZ/asyncmrcache)
 
 
 # Usage

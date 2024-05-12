@@ -7,8 +7,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <time.h>
+#include <sys/uio.h>
 
-#include "mrloop.h"
 #include "hashtable.h"
 
 #define DBG if(0) 
@@ -27,7 +27,6 @@ typedef struct config_t {
   int block_size;  // mb
   int max_connections;
   uint32_t flags;
-  mr_loop_t *loop;
 
   // Stats // TODO move
   uint64_t tot_reads;
