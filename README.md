@@ -23,6 +23,7 @@ GET - 10kb (ops/sec)
 # Dependencies
 
 * Linux kernel version 5.8+
+* [Liburing](https://github.com/axboe/liburing)
 * [zstd compression](https://github.com/facebook/zstd)
 * [Python asyncio client](https://github.com/MarkReedZ/asyncmrcache)
 
