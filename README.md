@@ -61,6 +61,8 @@ You must also specify the size of your index as the index is allocated at startu
 
 # Internals
 
+The layout of the running server, and the design for a disk capacity tier, are in [docs/architecture.md](docs/architecture.md). The io_uring rules that design depends on are in [docs/io_uring.md](docs/io_uring.md). Upstream papers are in [docs/references/](docs/references/).
+
 Mrcache has an item overhead of 18 bytes vs 50 to 60 for redis and memcached.  This is achieved by using an open addressing hash table and writing items into 16mb blocks in memory.  Instead of using pointers we store the block number and offset in order to retrieve the item which saves space allowing us to pack more information into the 8 bytes stored in the index hash table.  
 
 The open addressing hash table is an in memory index for all of our items.  When hash collisions occur instead of having a linked list of items for that 'bucket' we increment the hash value and store our item in the first open spot.  To retrieve an item we compare our key against the item's key and increment the hash until we find our item or an empty spot in the index.  On average 2 items will be tested for each get if the cache is full.  For items stored on disk we keep the last byte of the key in the index to avoid unnecessary reads to disk for the key comparisons. 
