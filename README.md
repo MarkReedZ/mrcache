@@ -1,74 +1,72 @@
-# Mrcache
+# mrcache
 
-Mrcache is a key value cache with support for compression that is 25x faster than memcached.  Mrcache focuses on speed and limiting overhead to <20B per item (vs 60 for redis) which results in a few limitations described below.  It also requires linux kernel 5.5+ as it uses io_uring to hit the benchmark numbers below.
+mrcache is an in-memory key-value cache. It keeps the per-key overhead small, serves GET replies straight out of the value arena, and drives the sockets with `io_uring`. It is a single thread, a FIFO of fixed-size blocks, and a binary protocol. It does not store to disk.
 
-# Benchmarks
+Linux 6.1 or newer and [liburing](https://github.com/axboe/liburing) are required. When the kernel allows it, a submission-queue polling thread submits I/O. That thread is a second core while the server is busy, and it goes idle two seconds after the last submission.
 
-```
-GET - 16B (ops/sec)
-
-  mrcache        18.6m 
-  redis           2.5m
-  memcached       400k
-
-GET - 10kb (ops/sec)
-
-  mrcache         979k
-  mrcache (zstd)  212k
-  memcached       261k
-  redis           313k
+## Build
 
 ```
-
-# Dependencies
-
-* Linux kernel version 5.8+
-* [Liburing](https://github.com/axboe/liburing)
-* [zstd compression](https://github.com/facebook/zstd)
-* [Python asyncio client](https://github.com/MarkReedZ/asyncmrcache)
-
-
-# Usage
-
-Use `make` to build and `mrcache` to run
-
-```
-Mrcache Version 0.1
-    -h, --help                    This help
-    -p, --port=<num>              TCP port to listen on (default: 7000)
-    -m, --max-memory=<mb>         Maximum amount of memory in mb (default: 256)
-    -i, --index-size=<mb>         Index size in mb (must be a power of 2 and sz/14 is the max number of items)
-    -z, --zstd                    Enable zstd compression 
+make
+./mrcache -p 7000 -m 256
 ```
 
-# Clients
+| Flag | Meaning |
+| --- | --- |
+| `-p` | TCP port (default 7000) |
+| `-m` | Arena size in MiB (default 256) |
+| `-M` | Arena size in bytes, instead of `-m` |
+| `-i` | Index size in MiB (default about 10% of the arena, at least 1 MiB when the arena is that large) |
+| `-B` | Block size in bytes, a power of two (default 16 MiB, or the arena if that is smaller) |
 
-[Python asyncio](https://github.com/MarkReedZ/asyncmrcache)
+`make test` builds the server, runs the in-process store tests, and runs the Go protocol tests.
+
+## Protocol
+
+Integers are little-endian. Every command has one reply, in order.
+
 ```
-# pip install asyncmrcache
-
-    rc = await asyncmrcache.create_client("localhost", loop)
-    await rc.set(b"key", b"value")
-    print( await rc.get(b"key") )
-
+request:  u8 version=1, u8 op, u16 key_len, u32 val_len, key, value
 ```
 
-# Limitations
+`val_len` and the value bytes are present only for `SET`. Other commands send `val_len = 0` and no value.
 
-Key size is limited to < 32kb and values are limited to < 16mb due to the focus on maximizing speed and limiting per item memory overhead. 
+| Op | Code | Reply |
+| --- | --- | --- |
+| GET | 1 | `u8 status`, `u32 val_len`, value. Status 0 is a hit, including an empty value. Status 1 is a miss and `val_len` is 0. |
+| SET | 2 | `u8 status`. 0 stored. 2 does not fit in a block. |
+| DEL | 3 | `u8 status`. 0 deleted. 1 not found. |
+| PING | 4 | `u8 0`. `key_len` and `val_len` are 0. |
+| STAT | 5 | `u8 0`, then seven `u64` counters: gets, hits, misses, sets, dels, evicts, live keys. |
 
-You must also specify the size of your index as the index is allocated at startup and does not grow or shrink.  Index overhead is ~14 bytes meaning if you allocate 16mb to the index you can store a little over a million items before the cache becomes full.  If you have 4gb of memory and 1TB of disk space with 10kb items to store then you can fit 100 million items on disk and would need to allocate 1.4gb to the index.
+A key is at most 65535 bytes. A value has to fit in one block together with its header and key. Items are never split. An empty value is stored and returned as a hit.
 
-# Internals
+## Layout
 
-Mrcache has an item overhead of 18 bytes vs 50 to 60 for redis and memcached.  This is achieved by using an open addressing hash table and writing items into 16mb blocks in memory.  Instead of using pointers we store the block number and offset in order to retrieve the item which saves space allowing us to pack more information into the 8 bytes stored in the index hash table.  
+The index is an open-addressed table of 8-byte slots (block sequence and offset), filled to at most 70%. The arena is one allocation split into fixed blocks, default 16 MiB. Items are appended into the current block. When the arena or the index is full, the oldest block is dropped and the keys that lived there become misses. Replacing a key writes a new copy and leaves the old bytes until that block is dropped.
 
-The open addressing hash table is an in memory index for all of our items.  When hash collisions occur instead of having a linked list of items for that 'bucket' we increment the hash value and store our item in the first open spot.  To retrieve an item we compare our key against the item's key and increment the hash until we find our item or an empty spot in the index.  On average 2 items will be tested for each get if the cache is full.  For items stored on disk we keep the last byte of the key in the index to avoid unnecessary reads to disk for the key comparisons. 
+A GET reply is the first bytes of the item (`status`, `val_len`, value), so the socket write points into the arena. That block stays pinned until the write completes, which stops eviction from reusing it underneath an in-flight reply.
 
-Mrcache is a FIFO cache.  We store items into 16mb blocks in memory and when memory is full we drop the oldest block.  If you have 16gb of memory and are writing 200mb per second then you'll evict 1/16th of the cache every 80 seconds.  This can be made to be a pseudo LRU by rewriting soon to be evicted items at the front on a get. 
+There is no TTL, no LRU, no persistence, and no replication. FIFO is the eviction policy because it keeps writes sequential in the arena and the index entry at 8 bytes.
 
-When a block is dropped the evicted items remain in our index, however when we scan the index we check the block number and treat evicted items as free spaces in the index.  The index is allocated at startup to reduce the complexity of the code mainly due to the intention of supporting items on disk. 
+## Benchmark
 
+`bench/bench.go` speaks this protocol and Redis RESP. It checks the payload of every GET.
 
+```
+# mrcache, from the repo root, with the server already listening
+cd bench && go run . -p 7000 -d 5 -c 16 -b 64 -k 16 -v 128 -keys 1000
 
+# the same client against Redis
+go run . -redis -p 6379 -d 5 -c 16 -b 64 -k 16 -v 128 -keys 1000 -op get
+```
 
+`-op set` measures writes. `-keys 1` is a single hot key. A larger `-keys` spreads the lookup.
+
+## Where this fits next to Redis
+
+Released Redis, through 8.4 (November 2025) and the 8.12 release candidates (November 2026), does not include an `io_uring` backend. `io_uring` support exists as open pull requests. What Redis did ship, starting in 8.0, is I/O threads on top of its epoll loop: extra threads read and write sockets while commands still run on one thread.
+
+That difference is smaller than the data-structure difference. Redis parses RESP, looks up a `dict` entry, and follows an object header and an SDS string. A small string key costs on the order of a few dozen bytes of allocator and metadata overhead before the value. mrcache's steady-state overhead is the 7-byte item prefix plus one 8-byte index slot at a 70% fill, about 18 bytes on top of the key and the value, and the GET does not copy the value.
+
+mrcache is the right tool when all of these are true: the working set is strings, losing the oldest block is acceptable, the process can be Linux-only, and one core should hold as many keys as possible and answer them with as little work as possible. It is the wrong tool when you need expiry, LRU, persistence, replication, multiple cores of command execution, or the Redis client ecosystem. Those features are why Redis is larger and slower per key, and they are also why it is the default.

@@ -1,7 +1,10 @@
 mrcache
+store_test
 bench/*
 !bench/*.c
 !bench/*.h
+!bench/*.go
+!bench/go.mod
 !bench/bld
 !bench/py
 !bench/README.md
@@ -69,6 +72,7 @@ fsblocks
 
 # Kernel Module Compile Results
 *.mod*
+!bench/go.mod
 *.cmd
 .tmp_versions/
 modules.order
