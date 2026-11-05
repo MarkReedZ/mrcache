@@ -1,191 +1,477 @@
 package main
 
 import (
-	"errors"
+	"bufio"
+	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
-	//"crypto/rand"
 	"net"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
-	"bytes"
-  "flag"
-  "encoding/binary"
-  "strconv"
 )
 
-var(
-    limitSeconds int
-    numConnections int
-    keyLength int
-    length int
-    port int
-    hostname string
-    batch int
-    redis bool
-    compression bool
-    buffer bytes.Buffer
-    key []byte
-    val []byte
+const (
+	opGet  = 1
+	opSet  = 2
+	opDel  = 3
+	opPing = 4
+	opStat = 5
 )
-
-func formatInt(number int64) string {
-    output := strconv.FormatInt(number, 10)
-    startOffset := 3
-    if number < 0 {
-        startOffset++
-    }
-    for outputIndex := len(output); outputIndex > startOffset; {
-        outputIndex -= 3
-        output = output[:outputIndex] + "," + output[outputIndex:]
-    }
-    return output
-}
-
-// Client loops writing buffer and read the response for x seconds
-func client(c chan int, tcpAddr *net.TCPAddr, tid int ) {
-	  reply := make([]byte, 4096)
-    transmits := 0
-    conn, err := net.DialTCP("tcp", nil, tcpAddr)
-		if err != nil { println("Dial failed:", err.Error()); os.Exit(1); }
-
-	  start := time.Now()
-    reps := 0
-    tbytes := 0
-		for {
-
-        reps += 1
-        //fmt.Printf("Before write %d\n",tid);
-        _, err = conn.Write(buffer.Bytes())
-        //fmt.Printf("After write\n");
-        if err != nil { fmt.Printf("Write Error: %v\n", err); break; }
-
-        l := 0
-        conn.SetReadDeadline(time.Now().Add(time.Second*5))
-        bytes := 0
-        for bytes < length*batch {
-          l, err = conn.Read(reply)
-          if err != nil { 
-              fmt.Printf("DELME tid %d err %v\n",tid, err); 
-              fmt.Printf("bytes %d of %d reps %d tid %d\n",bytes,length*batch, reps, tid );
-          }
-          if err != nil { break }
-          //fmt.Printf("%v\n",reply[:16]);  
-          bytes += l
-          tbytes += l
-          //fmt.Printf("bytes %d \n",bytes);
-          //fmt.Printf("bytes %d vlen %d\n",bytes, binary.LittleEndian.Uint32(reply[1:6]))
-          //os.Exit(1); 
-        }
-        //fmt.Printf("After read %d tbytes %d\n",tid, tbytes);
-        
-        //fmt.Printf("bytes %d of %d reps %d tid %d\n",bytes,length*batch, reps, tid );
-        //fmt.Printf("%v\n",reply[:l])
-        if err != nil && !errors.Is(err, io.EOF) { break }
-
-        if time.Since(start).Seconds() >= float64(limitSeconds) { break }
-
-        transmits++
-   }
-   conn.Close()
-   c <- transmits
-}
-
-// Write data for the benchmark
-func setup(tcpAddr *net.TCPAddr) {
-    buffer.Reset()
-    val = make([]byte, length);    //rand.Read(val);
-    key = make([]byte, keyLength); //rand.Read(key);
-    if redis {
-        //buffer.WriteString("*3\r\n$3\r\nSET\r\n$4\r\ntest\r\n$16\r\n0123456789012345\r\n")
-
-        buffer.WriteString("*3\r\n$3\r\nSET\r\n$")
-        buffer.WriteString(strconv.Itoa(keyLength)); buffer.WriteString("\r\n")
-        buffer.Write(key); buffer.WriteString("\r\n$")
-        buffer.WriteString(strconv.Itoa(length)); buffer.WriteString("\r\n");
-        buffer.Write(val); buffer.WriteString("\r\n")
-
-    } else {
-        //buffer.Write( []byte{ 0, 2, 4, 0, 16, 0, 0, 0, 1,1,1,1, 1,1,1,1 ,1,1,1,1 ,1,1,1,1 ,1,1,1,1 } )
-
-        klen := make([]byte, 2); binary.LittleEndian.PutUint16(klen, uint16(keyLength))
-        vlen := make([]byte, 4); binary.LittleEndian.PutUint32(vlen, uint32(length))
-        if compression { 
-          buffer.Write( []byte{0, 4} ); 
-        } else { 
-          buffer.Write( []byte{0, 2} ); 
-        }
-        buffer.Write( klen ); buffer.Write( vlen )
-        buffer.Write( key );  buffer.Write( val )
-
-    }
-    conn, err := net.DialTCP("tcp", nil, tcpAddr)
-		if err != nil { println("Dial failed:", err.Error()); os.Exit(1); }
-    _, err = conn.Write(buffer.Bytes())
-    if err != nil { fmt.Printf("Write Error: %v\n", err); }
-    conn.Close()
-}
 
 func main() {
+	var (
+		port  = flag.Int("p", 7000, "port")
+		host  = flag.String("h", "127.0.0.1", "hostname")
+		conns = flag.Int("c", 16, "connections")
+		secs  = flag.Int("d", 3, "seconds")
+		klen  = flag.Int("k", 16, "key length")
+		vlen  = flag.Int("v", 128, "value length")
+		batch = flag.Int("b", 32, "pipelined commands per round trip")
+		keys  = flag.Int("keys", 1, "distinct keys (cycled)")
+		op    = flag.String("op", "get", "get or set")
+		redis = flag.Bool("redis", false, "speak the Redis protocol")
+	)
+	flag.Parse()
+	if *batch < 1 || *keys < 1 || *klen < 1 || *vlen < 0 {
+		fmt.Fprintln(os.Stderr, "invalid sizes")
+		os.Exit(2)
+	}
+	if *redis && *port == 7000 {
+		*port = 6379
+	}
+	addr := fmt.Sprintf("%s:%d", *host, *port)
+	keysB := makeKeys(*keys, *klen)
+	val := bytesOf(*vlen, 'v')
 
-  flag.IntVar(&port,           "p",  7000,     "port")
-  flag.StringVar(&hostname,    "h",  "localhost",     "hostname")
-  flag.IntVar(&numConnections, "c",  16,       "Number of connections")
-  flag.IntVar(&limitSeconds,   "s",  2,        "Stop after n seconds")
-  flag.IntVar(&keyLength,      "k",  16,       "Key length in bytes")
-  flag.IntVar(&length,         "v",  256,      "Value length in bytes")
-  flag.IntVar(&batch,          "b",  1,        "Batch n requests together")
-  flag.BoolVar(&redis,         "redis", false, "Benchmark redis")
-  flag.BoolVar(&compression,   "z",     false, "Enable compression")
-  flag.Parse()
-
-  if port == 7000 && redis {
-    port = 6379
-  }
-	servAddr := fmt.Sprintf(`%s:%d`,hostname,port)
-	tcpAddr, err := net.ResolveTCPAddr("tcp", servAddr)
-	if err != nil {
-		println("ResolveTCPAddr failed:", err.Error())
+	if err := preload(addr, keysB, val, *redis, *op); err != nil {
+		fmt.Fprintf(os.Stderr, "preload: %v\n", err)
 		os.Exit(1)
 	}
 
-  setup(tcpAddr)
-
-
-  fmt.Printf("Benchmarking for %d seconds with %d connections and a batch size of %d \n", limitSeconds, numConnections, batch);
-
-  fmt.Printf("  Get %db\n", length);
-  buffer.Reset()
-  for i := 0; i < batch; i++ {
-      if redis {
-          buffer.WriteString("*2\r\n$3\r\nGET\r\n$")
-          buffer.WriteString(strconv.Itoa(keyLength)); buffer.WriteString("\r\n")
-          buffer.Write(key); buffer.WriteString("\r\n")
-      } else {
-          if compression { 
-            buffer.Write( []byte{0, 3} )
-          } else { 
-            buffer.Write( []byte{0, 1} )
-          }
-          klen := make([]byte, 2); binary.LittleEndian.PutUint16(klen, uint16(keyLength))
-          buffer.Write(klen)
-          buffer.Write(key)
-      }
-  }
-
-  c := make(chan int)
-	start := time.Now()
-	for i := 0; i < numConnections; i++ {
-    go client( c, tcpAddr, i )
+	var wg sync.WaitGroup
+	type result struct {
+		ops int
+		rtt time.Duration
+		n   int
+		err error
 	}
-  transmits := 0; for i := 0; i < numConnections; i++ { transmits += <-c }
-
+	ch := make(chan result, *conns)
+	deadline := time.Now().Add(time.Duration(*secs) * time.Second)
+	start := time.Now()
+	for i := 0; i < *conns; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			ops, rtt, n, err := worker(addr, keysB, val, *batch, *op, *redis, deadline, id)
+			ch <- result{ops, rtt, n, err}
+		}(i)
+	}
+	wg.Wait()
+	close(ch)
 	elapsed := time.Since(start)
-	latency := float64(elapsed.Microseconds()) / float64(transmits)
-	speed := int64((float64(transmits) / float64(elapsed.Seconds())) * float64(batch))
-	fmt.Printf("    %s commands/second, mean latency %.1fu\n", formatInt(speed), latency)
-  //fmt.Printf("    Took %s to perform %d requests\n", elapsed, transmits*batch)
-	//fmt.Printf("    Mean latency is %.1f microsecond\n", latency)
-	//fmt.Printf("    Resulting in %.1f commands/second\n", speed)
 
+	var ops int
+	var rtt time.Duration
+	var rounds int
+	var failed int
+	for r := range ch {
+		ops += r.ops
+		rtt += r.rtt
+		rounds += r.n
+		if r.err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "worker: %v\n", r.err)
+		}
+	}
+	if failed > 0 {
+		os.Exit(1)
+	}
+	rate := float64(ops) / elapsed.Seconds()
+	us := 0.0
+	if rounds > 0 && *batch > 0 {
+		us = float64(rtt.Nanoseconds()) / float64(rounds) / float64(*batch) / 1000.0
+	}
+	fmt.Printf("%s %s  %s ops/sec   mean pipeline latency %.1fµs/op   conns=%d batch=%d keys=%d key=%dB val=%dB\n",
+		map[bool]string{true: "redis", false: "mrcache"}[*redis], *op,
+		formatInt(int64(rate)), us,
+		*conns, *batch, *keys, *klen, *vlen)
+}
+
+func worker(addr string, keys [][]byte, val []byte, batch int, op string, redis bool, deadline time.Time, id int) (int, time.Duration, int, error) {
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if tcp, ok := c.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
+	}
+	defer c.Close()
+	r := bufio.NewReaderSize(c, 256*1024)
+	got := make([]byte, len(val))
+	var buf []byte
+	ops, rounds := 0, 0
+	var rtt time.Duration
+	keyN := len(keys)
+	for time.Now().Before(deadline) {
+		buf = buf[:0]
+		base := (id + rounds) % keyN
+		for i := 0; i < batch; i++ {
+			k := keys[(base+i)%keyN]
+			if redis {
+				if op == "set" {
+					buf = appendRESPSet(buf, k, val)
+				} else {
+					buf = appendRESPGet(buf, k)
+				}
+			} else if op == "set" {
+				buf = appendSet(buf, k, val)
+			} else {
+				buf = appendGet(buf, k)
+			}
+		}
+		t0 := time.Now()
+		if _, err = c.Write(buf); err != nil {
+			return ops, rtt, rounds, err
+		}
+		for i := 0; i < batch; i++ {
+			k := keys[(base+i)%keyN]
+			if redis {
+				n, miss, err := readRESPInto(r, got)
+				if err != nil {
+					return ops, rtt, rounds, err
+				}
+				if op == "get" && (miss || n != len(val) || !bytesEqual(got[:n], val)) {
+					return ops, rtt, rounds, fmt.Errorf("redis get mismatch key %q", k)
+				}
+			} else if op == "set" {
+				if err = readStatus(r); err != nil {
+					return ops, rtt, rounds, err
+				}
+			} else {
+				n, miss, err := readGetInto(r, got)
+				if err != nil {
+					return ops, rtt, rounds, err
+				}
+				if miss || n != len(val) || !bytesEqual(got[:n], val) {
+					return ops, rtt, rounds, fmt.Errorf("get mismatch (%d bytes, miss=%v)", n, miss)
+				}
+			}
+		}
+		rtt += time.Since(t0)
+		ops += batch
+		rounds++
+	}
+	return ops, rtt, rounds, nil
+}
+
+func preload(addr string, keys [][]byte, val []byte, redis bool, op string) error {
+	if op == "set" {
+		return nil
+	}
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	r := bufio.NewReader(c)
+	var buf []byte
+	const step = 64
+	for off := 0; off < len(keys); off += step {
+		buf = buf[:0]
+		end := off + step
+		if end > len(keys) {
+			end = len(keys)
+		}
+		for _, k := range keys[off:end] {
+			if redis {
+				buf = appendRESPSet(buf, k, val)
+			} else {
+				buf = appendSet(buf, k, val)
+			}
+		}
+		if _, err = c.Write(buf); err != nil {
+			return err
+		}
+		for range keys[off:end] {
+			if redis {
+				if _, _, err = readRESP(r); err != nil {
+					return err
+				}
+			} else if err = readStatus(r); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func makeKeys(n, klen int) [][]byte {
+	out := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		k := bytesOf(klen, 'k')
+		s := strconv.Itoa(i)
+		if len(s) > len(k) {
+			s = s[len(s)-len(k):]
+		}
+		copy(k[len(k)-len(s):], s)
+		out[i] = k
+	}
+	return out
+}
+
+func bytesOf(n int, b byte) []byte {
+	p := make([]byte, n)
+	for i := range p {
+		p[i] = b
+	}
+	return p
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func appendGet(dst, key []byte) []byte {
+	var hdr [8]byte
+	hdr[0] = 1
+	hdr[1] = opGet
+	binary.LittleEndian.PutUint16(hdr[2:], uint16(len(key)))
+	dst = append(dst, hdr[:]...)
+	return append(dst, key...)
+}
+
+func appendSet(dst, key, val []byte) []byte {
+	var hdr [8]byte
+	hdr[0] = 1
+	hdr[1] = opSet
+	binary.LittleEndian.PutUint16(hdr[2:], uint16(len(key)))
+	binary.LittleEndian.PutUint32(hdr[4:], uint32(len(val)))
+	dst = append(dst, hdr[:]...)
+	dst = append(dst, key...)
+	return append(dst, val...)
+}
+
+func appendDel(dst, key []byte) []byte {
+	var hdr [8]byte
+	hdr[0] = 1
+	hdr[1] = opDel
+	binary.LittleEndian.PutUint16(hdr[2:], uint16(len(key)))
+	dst = append(dst, hdr[:]...)
+	return append(dst, key...)
+}
+
+func appendPing(dst []byte) []byte {
+	return append(dst, 1, opPing, 0, 0, 0, 0, 0, 0)
+}
+
+func appendStat(dst []byte) []byte {
+	return append(dst, 1, opStat, 0, 0, 0, 0, 0, 0)
+}
+
+func readStatus(r *bufio.Reader) error {
+	st, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+	if st != 0 && st != 1 && st != 2 {
+		return fmt.Errorf("status %d", st)
+	}
+	return nil
+}
+
+func readGetInto(r *bufio.Reader, dst []byte) (n int, miss bool, err error) {
+	var hdr [5]byte
+	if _, err = io.ReadFull(r, hdr[:]); err != nil {
+		return 0, false, err
+	}
+	vlen := binary.LittleEndian.Uint32(hdr[1:])
+	if hdr[0] == 1 {
+		if vlen != 0 {
+			return 0, false, fmt.Errorf("miss with length %d", vlen)
+		}
+		return 0, true, nil
+	}
+	if hdr[0] != 0 {
+		return 0, false, fmt.Errorf("get status %d", hdr[0])
+	}
+	if int(vlen) > len(dst) {
+		return 0, false, fmt.Errorf("value length %d", vlen)
+	}
+	if vlen > 0 {
+		if _, err = io.ReadFull(r, dst[:vlen]); err != nil {
+			return 0, false, err
+		}
+	}
+	return int(vlen), false, nil
+}
+
+func readRESPInto(r *bufio.Reader, dst []byte) (n int, miss bool, err error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return 0, false, err
+	}
+	if len(line) < 3 || line[len(line)-2] != '\r' {
+		return 0, false, fmt.Errorf("short redis line %q", line)
+	}
+	body := line[1 : len(line)-2]
+	switch line[0] {
+	case '+', ':':
+		return 0, false, nil
+	case '-':
+		return 0, false, fmt.Errorf("redis error %s", body)
+	case '$':
+		bn, err := strconv.Atoi(body)
+		if err != nil {
+			return 0, false, err
+		}
+		if bn < 0 {
+			return 0, true, nil
+		}
+		if bn > len(dst) {
+			return 0, false, fmt.Errorf("bulk %d exceeds buffer", bn)
+		}
+		if bn > 0 {
+			if _, err = io.ReadFull(r, dst[:bn]); err != nil {
+				return 0, false, err
+			}
+		}
+		var crlf [2]byte
+		if _, err = io.ReadFull(r, crlf[:]); err != nil {
+			return 0, false, err
+		}
+		return bn, false, nil
+	default:
+		return 0, false, fmt.Errorf("redis type %q", line[:1])
+	}
+}
+
+func readGet(r *bufio.Reader) (val []byte, miss bool, err error) {
+	var hdr [5]byte
+	if _, err = io.ReadFull(r, hdr[:]); err != nil {
+		return nil, false, err
+	}
+	vlen := binary.LittleEndian.Uint32(hdr[1:])
+	if hdr[0] == 1 {
+		if vlen != 0 {
+			return nil, false, fmt.Errorf("miss with length %d", vlen)
+		}
+		return nil, true, nil
+	}
+	if hdr[0] != 0 {
+		return nil, false, fmt.Errorf("get status %d", hdr[0])
+	}
+	if vlen > 32*1024*1024 {
+		return nil, false, fmt.Errorf("value length %d", vlen)
+	}
+	val = make([]byte, vlen)
+	if vlen > 0 {
+		if _, err = io.ReadFull(r, val); err != nil {
+			return nil, false, err
+		}
+	}
+	return val, false, nil
+}
+
+type statResult struct {
+	gets, hits, misses, sets, dels, evicts, live uint64
+}
+
+func readStat(r *bufio.Reader) (statResult, error) {
+	var raw [1 + 7*8]byte
+	if _, err := io.ReadFull(r, raw[:]); err != nil {
+		return statResult{}, err
+	}
+	if raw[0] != 0 {
+		return statResult{}, fmt.Errorf("stat status %d", raw[0])
+	}
+	var s statResult
+	s.gets = binary.LittleEndian.Uint64(raw[1:])
+	s.hits = binary.LittleEndian.Uint64(raw[9:])
+	s.misses = binary.LittleEndian.Uint64(raw[17:])
+	s.sets = binary.LittleEndian.Uint64(raw[25:])
+	s.dels = binary.LittleEndian.Uint64(raw[33:])
+	s.evicts = binary.LittleEndian.Uint64(raw[41:])
+	s.live = binary.LittleEndian.Uint64(raw[49:])
+	return s, nil
+}
+
+func appendRESPGet(dst, key []byte) []byte {
+	return appendRESP(dst, []byte("GET"), key)
+}
+
+func appendRESPSet(dst, key, val []byte) []byte {
+	return appendRESP(dst, []byte("SET"), key, val)
+}
+
+func appendRESP(dst []byte, parts ...[]byte) []byte {
+	dst = append(dst, '*')
+	dst = strconv.AppendInt(dst, int64(len(parts)), 10)
+	dst = append(dst, '\r', '\n')
+	for _, p := range parts {
+		dst = append(dst, '$')
+		dst = strconv.AppendInt(dst, int64(len(p)), 10)
+		dst = append(dst, '\r', '\n')
+		dst = append(dst, p...)
+		dst = append(dst, '\r', '\n')
+	}
+	return dst
+}
+
+func readRESP(r *bufio.Reader) (bulk []byte, miss bool, err error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return nil, false, err
+	}
+	if len(line) < 3 || line[len(line)-2] != '\r' {
+		return nil, false, fmt.Errorf("short redis line %q", line)
+	}
+	body := line[1 : len(line)-2]
+	switch line[0] {
+	case '+', ':':
+		return []byte(body), false, nil
+	case '-':
+		return nil, false, fmt.Errorf("redis error %s", body)
+	case '$':
+		n, err := strconv.Atoi(body)
+		if err != nil {
+			return nil, false, err
+		}
+		if n < 0 {
+			return nil, true, nil
+		}
+		buf := make([]byte, n)
+		if _, err = io.ReadFull(r, buf); err != nil {
+			return nil, false, err
+		}
+		if _, err = io.ReadFull(r, make([]byte, 2)); err != nil {
+			return nil, false, err
+		}
+		return buf, false, nil
+	default:
+		return nil, false, fmt.Errorf("redis type %q", line[:1])
+	}
+}
+
+func formatInt(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }

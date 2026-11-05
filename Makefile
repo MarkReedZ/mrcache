@@ -1,26 +1,23 @@
-
-TARGET = mrcache
-LIBS = -lmrloop -luring -lzstd
 CC = gcc
-CFLAGS = -O3
+CFLAGS = -O3 -Wall -Wextra -Wno-unused-function
+LIBS = -luring
 
-.PHONY: default all clean
+.PHONY: all test clean bench
 
-default: $(TARGET)
-all: default
+all: mrcache
 
-OBJECTS = $(patsubst %.c, %.o, $(wildcard *.c))
-HEADERS = $(wildcard *.h)
+mrcache: mrcache.c net.c store.c protocol.h store.h net.h wyhash.h
+	$(CC) $(CFLAGS) -o mrcache mrcache.c net.c store.c $(LIBS)
 
-%.o: %.c $(HEADERS)
-	$(CC) $(CFLAGS) -c $< -o $@
+store_test: store_test.c store.c store.h protocol.h wyhash.h
+	$(CC) $(CFLAGS) -o store_test store_test.c store.c
 
-.PRECIOUS: $(TARGET) $(OBJECTS)
+test: mrcache store_test
+	./store_test
+	cd bench && go test -count=1 -timeout 180s
 
-$(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) $(OBJECTS) $(LIBS) -o $@
+bench: mrcache
+	cd bench && go run . -d 3 -c 8 -b 32 -k 16 -v 128
 
 clean:
-	-rm -f *.o
-	-rm -f $(TARGET)
-
+	rm -f mrcache store_test
